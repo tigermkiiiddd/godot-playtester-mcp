@@ -5,7 +5,6 @@ using System.Net;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Unicode;
 using System.Threading;
 
 /// <summary>
@@ -23,10 +22,10 @@ using System.Threading;
 /// </summary>
 public partial class GameMcpServer : Node
 {
-    // Shared JSON options: Chinese/Unicode output as raw UTF-8, not \uXXXX escapes
+    // Shared JSON options: Chinese/Unicode output as raw UTF-8, readable escapes
     internal static readonly JsonSerializerOptions JsonOpts = new()
     {
-        Encoder = JavaScriptEncoder.Create(UnicodeRanges.All),
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         WriteIndented = false
     };
 
@@ -74,7 +73,7 @@ public partial class GameMcpServer : Node
     [Export] public bool ShowCursor = true;
     private CanvasLayer _cursorLayer;
     private Control _cursorCross;
-    private Vector2 _simMousePos = new(-100, -100); // off-screen until first use
+    private Vector2 _simMousePos; // initialized to screen center in _Ready
     private bool _simMouseLeftDown;   // simulated left button state
     private bool _simMouseRightDown;  // simulated right button state
     private bool _prevMouseLeftDown;  // previous frame state (for edge detection)
@@ -93,6 +92,7 @@ public partial class GameMcpServer : Node
     public override void _Ready()
     {
         if (!Enabled) return;
+        _simMousePos = DisplayServer.WindowGetSize() / 2; // center of screen
         RegisterBuiltinTools();
         RegisterMacroTools();
         StartServer();
