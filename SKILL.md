@@ -113,6 +113,24 @@ private void RegisterMcpMetrics()
 }
 ```
 
+### Log Registration Convention
+
+Three-tier logging for AI debugging:
+
+```csharp
+// AI Log — important events (ring buffer, MCP queryable)
+GameMcpServer.Instance?.Log("scene", "Loading scene: BattleArena");
+GameMcpServer.Instance?.LogWarn("player", "HP below 20%");
+GameMcpServer.Instance?.LogError("system", "Save file corrupted");
+
+// File Log — high-volume data (disk, MCP queryable)
+GameMcpServer.Instance?.FileLog("combat", $"enemy={enemyId} damage={dmg} hp={hp}");
+GameMcpServer.Instance?.FileLog("economy", $"spent={amount} on={item}");
+
+// Debug Log — replaces GD.Print for MCP visibility
+GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
+```
+
 ## Built-in Tools
 
 ### State & Structure (primary feedback channels)
@@ -149,6 +167,23 @@ private void RegisterMcpMetrics()
 |------|-------------|------------|
 | `start_test` | Start background test scene | `scene_path`, `duration`, `capture_frames` |
 | `get_test_results` | Get test results | `test_id`, `include` (all/metrics/screenshots/logs) |
+
+### Log System (three-tier)
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `get_logs` | Query AI log ring buffer (important events) | `min_level`, `category`, `since`, `limit`, `order` |
+| `get_debug_logs` | Query debug log ring buffer (GD.Print replacement) | `min_level`, `since`, `limit` |
+| `log` | Write an AI agent log entry | `message`, `level`, `category` |
+| `get_file_logs` | Read recent entries from a file log | `category`, `limit` |
+| `get_file_log_summary` | File log statistics per category | none |
+| `clear_logs` | Clear all ring buffers | none |
+
+**Three log tiers:**
+
+1. **AI Log** — Important game events (scene change, death, level up, UI open/close). Ring buffer 1000 entries. Game code: `GameMcpServer.Instance?.Log("scene", "Loading BattleArena")`
+2. **File Log** — High-volume data (combat damage, economy). Written to `user://mcp_logs/category_date.log`. Game code: `GameMcpServer.Instance?.FileLog("combat", $"enemy={id} damage={dmg}")`
+3. **Debug Log** — Replaces GD.Print for MCP visibility. Ring buffer 2000 entries. Game code: `GameMcpServer.Instance?.DebugLog("Pathfinding recalculated")`
 
 ### Macro System (scripted input sequences)
 
