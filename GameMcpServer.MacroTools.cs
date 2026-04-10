@@ -10,8 +10,8 @@ public partial class GameMcpServer
     private void RegisterMacroTools()
     {
         Reg("execute_macro",
-            "Execute a sequence of timed input actions (macro). Supports: hold_key (press for duration), tap_key (instant press+release), repeat_key (press N times with interval), combo_keys (multiple keys simultaneously), move_distance (hold direction until player moves X pixels), click (mouse), wait (delay). Returns macro_id immediately; query progress with get_macro_status.",
-            p("{\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"},\"keys\":{\"type\":\"string\"},\"duration\":{\"type\":\"number\"},\"count\":{\"type\":\"integer\"},\"interval\":{\"type\":\"number\"},\"direction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"button\":{\"type\":\"string\"},\"delay\":{\"type\":\"number\"},\"label\":{\"type\":\"string\"}},\"required\":[\"action\"]}},\"name\":{\"type\":\"string\"}}", "object", new[] { "steps" }),
+            "Execute a sequence of timed input actions (macro). Supports: hold_key (press for duration), tap_key (instant press+release), repeat_key (press N times with interval), combo_keys (multiple keys simultaneously), move_distance (hold direction until player moves X pixels), move_to (walk to target world coordinates, supports diagonal), click (mouse), wait (delay). Returns macro_id immediately; query progress with get_macro_status.",
+            p("{\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"},\"keys\":{\"type\":\"string\"},\"duration\":{\"type\":\"number\"},\"count\":{\"type\":\"integer\"},\"interval\":{\"type\":\"number\"},\"direction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\"},\"target_x\":{\"type\":\"number\"},\"target_y\":{\"type\":\"number\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"button\":{\"type\":\"string\"},\"delay\":{\"type\":\"number\"},\"label\":{\"type\":\"string\"}},\"required\":[\"action\"]}},\"name\":{\"type\":\"string\"}}", "object", new[] { "steps" }),
             ExecuteMacroHandler);
 
         Reg("get_macro_status",
@@ -113,6 +113,11 @@ public partial class GameMcpServer
                     so["direction"] = s.Direction;
                     so["distance"] = s.Distance;
                 }
+                if (s.Type == MacroStepType.MoveTo)
+                {
+                    so["target_x"] = s.TargetX;
+                    so["target_y"] = s.TargetY;
+                }
                 if (s.Elapsed > 0) so["elapsed"] = Math.Round(s.Elapsed, 3);
                 if (s.ErrorMessage != null) so["error"] = s.ErrorMessage;
                 steps.Add(so);
@@ -176,6 +181,7 @@ public partial class GameMcpServer
             "repeat_key" => MacroStepType.RepeatKey,
             "combo_keys" => MacroStepType.ComboKeys,
             "move_distance" => MacroStepType.MoveDistance,
+            "move_to" => MacroStepType.MoveTo,
             "click" => MacroStepType.Click,
             "wait" => MacroStepType.Wait,
             _ => MacroStepType.Wait
@@ -207,6 +213,11 @@ public partial class GameMcpServer
         if (el.TryGetProperty("x", out var xEl)) step.X = xEl.GetSingle();
         if (el.TryGetProperty("y", out var yEl)) step.Y = yEl.GetSingle();
         if (el.TryGetProperty("button", out var btnEl)) step.Button = btnEl.GetString() ?? "left";
+
+        // Parse move_to target
+        if (el.TryGetProperty("target_x", out var txEl)) step.TargetX = txEl.GetSingle();
+        if (el.TryGetProperty("target_y", out var tyEl)) step.TargetY = tyEl.GetSingle();
+        if (el.TryGetProperty("mode", out var modeEl)) step.Mode = modeEl.GetString() ?? "8dir";
 
         // Set direction key for move_distance if not provided
         if (step.Type == MacroStepType.MoveDistance && step.Keys.Length == 0 && !string.IsNullOrEmpty(step.Direction))

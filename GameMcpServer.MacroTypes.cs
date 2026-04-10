@@ -8,6 +8,7 @@ public enum MacroStepType
     RepeatKey,
     ComboKeys,
     MoveDistance,
+    MoveTo,
     Click,
     Wait
 }
@@ -27,6 +28,9 @@ public class MacroStep
     public string Direction = "";
     public float Distance = 0f;
 
+    public float TargetX, TargetY;
+    public string Mode = "8dir"; // "8dir" diagonal, "4dir" single-axis L-path, "free" any-angle smooth
+
     public float X, Y;
     public string Button = "left";
 
@@ -38,6 +42,8 @@ public class MacroStep
     public bool KeyPressed;
     public Vector2 StartPosition;
     public string ErrorMessage;
+    public Vector2 LastCheckPos;
+    public double StuckTimer;
 }
 
 public class MacroRun

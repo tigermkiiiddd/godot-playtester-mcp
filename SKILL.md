@@ -159,7 +159,12 @@ private void RegisterMcpMetrics()
 | `cancel_macro` | Cancel running macro, release all held keys | `macro_id` |
 | `list_macros` | List macros, optionally filtered by status | `status` (running/completed/cancelled/error) |
 
-**Step action types**: `hold_key` (press for duration), `tap_key` (instant press+release), `repeat_key` (press N times with interval), `combo_keys` (multiple keys simultaneously), `move_distance` (hold direction until player moves X pixels), `click` (mouse), `wait` (delay).
+**Step action types**: `hold_key` (press for duration), `tap_key` (instant press+release), `repeat_key` (press N times with interval), `combo_keys` (multiple keys simultaneously), `move_distance` (hold direction until player moves X pixels), `move_to` (walk to target world coordinates), `click` (mouse), `wait` (delay).
+
+**move_to modes** (set `mode` parameter):
+- `8dir` (default) — diagonal allowed, WASD, axes finish independently. For 8-directional games.
+- `4dir` — single axis only, L-shaped path (X then Y). For 4-directional games.
+- `free` — smooth any-angle movement, directly sets position at player's own Speed. For free-movement games.
 
 ```json
 // Example: diagonal walk 0.5s → wait 0.3s → attack
@@ -174,6 +179,15 @@ private void RegisterMcpMetrics()
 
 // Example: move right 200 pixels
 {"steps": [{"action": "move_distance", "direction": "right", "distance": 200}]}
+
+// Example: walk to world coordinate (8dir, diagonal)
+{"steps": [{"action": "move_to", "target_x": 300, "target_y": -200}]}
+
+// Example: walk to coordinate (4dir, L-path)
+{"steps": [{"action": "move_to", "target_x": 300, "target_y": -200, "mode": "4dir"}]}
+
+// Example: smooth any-angle move (free mode)
+{"steps": [{"action": "move_to", "target_x": 150, "target_y": 80, "mode": "free"}]}
 ```
 
 ### Node Manipulation

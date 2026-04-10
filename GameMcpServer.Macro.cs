@@ -105,6 +105,7 @@ public partial class GameMcpServer
                 break;
 
             case MacroStepType.MoveDistance:
+            case MacroStepType.MoveTo:
                 var player = FindPlayer();
                 if (player is Node2D n2d)
                 {
@@ -116,6 +117,50 @@ public partial class GameMcpServer
                     step.ErrorMessage = "No player found for move_distance";
                     break;
                 }
+
+                // move_to: calculate direction keys dynamically
+                if (step.Type == MacroStepType.MoveTo)
+                {
+                    step.LastCheckPos = n2d.GlobalPosition;
+                    step.StuckTimer = 0;
+
+                    // free mode: smooth any-angle movement (direct position, no keys)
+                    if (step.Mode == "free")
+                    {
+                        // no key simulation, ProcessStep handles position directly
+                        break;
+                    }
+
+                    var keys = new System.Collections.Generic.List<string>();
+                    var codes = new System.Collections.Generic.List<Key>();
+                    float dx = step.TargetX - n2d.GlobalPosition.X;
+                    float dy = step.TargetY - n2d.GlobalPosition.Y;
+
+                    if (step.Mode == "4dir")
+                    {
+                        // 4dir: only one axis at a time, X first
+                        if (Math.Abs(dx) > 5f)
+                        {
+                            keys.Add(dx > 0 ? "D" : "A");
+                            codes.Add(dx > 0 ? Key.D : Key.A);
+                        }
+                        else if (Math.Abs(dy) > 5f)
+                        {
+                            keys.Add(dy > 0 ? "S" : "W");
+                            codes.Add(dy > 0 ? Key.S : Key.W);
+                        }
+                    }
+                    else // 8dir: diagonal allowed
+                    {
+                        if (dx > 5) { keys.Add("D"); codes.Add(Key.D); }
+                        else if (dx < -5) { keys.Add("A"); codes.Add(Key.A); }
+                        if (dy > 5) { keys.Add("S"); codes.Add(Key.S); }
+                        else if (dy < -5) { keys.Add("W"); codes.Add(Key.W); }
+                    }
+                    step.Keys = keys.ToArray();
+                    step.KeyCodes = codes.ToArray();
+                }
+
                 foreach (var kc in step.KeyCodes)
                     Input.ParseInputEvent(new InputEventKey { Pressed = true, Keycode = kc });
                 foreach (var k in step.Keys)
@@ -149,7 +194,8 @@ public partial class GameMcpServer
                 break;
 
             case MacroStepType.MoveDistance:
-                ProcessMoveDistance(macro, step);
+            case MacroStepType.MoveTo:
+                ProcessMoveDistance(macro, step, delta);
                 break;
         }
     }
@@ -192,7 +238,7 @@ public partial class GameMcpServer
         }
     }
 
-    private void ProcessMoveDistance(MacroRun macro, MacroStep step)
+    private void ProcessMoveDistance(MacroRun macro, MacroStep step, double delta)
     {
         var player = FindPlayer() as Node2D;
         if (player == null)
@@ -203,20 +249,116 @@ public partial class GameMcpServer
         }
 
         var current = player.GlobalPosition;
-        float traveled = step.Direction.ToLower() switch
-        {
-            "right" => current.X - step.StartPosition.X,
-            "left" => step.StartPosition.X - current.X,
-            "up" => step.StartPosition.Y - current.Y,
-            "down" => current.Y - step.StartPosition.Y,
-            _ => 0f
-        };
 
-        if (traveled >= step.Distance)
+        // move_to: free mode — smooth any-angle movement at player's own speed
+        if (step.Type == MacroStepType.MoveTo && step.Mode == "free")
         {
-            ReleaseStepKeys(macro, step);
-            step.Status = "completed";
+            if (player == null) { step.Status = "error"; step.ErrorMessage = "No player"; return; }
+            var target = new Vector2(step.TargetX, step.TargetY);
+            var diff = target - player.GlobalPosition;
+            var dist = diff.Length();
+            if (dist <= 2f)
+            {
+                player.GlobalPosition = target;
+                step.Status = "completed";
+                return;
+            }
+            // Read player's own speed, fallback 200
+            var speed = 200f;
+            var speedVal = player.Get("Speed");
+            if (speedVal.VariantType != Variant.Type.Nil)
+                speed = (float)speedVal;
+            var move = diff.Normalized() * speed * (float)delta;
+            if (move.Length() > dist) move = diff;
+            player.GlobalPosition += move;
             return;
+        }
+
+        // move_to: 4dir/8dir — check each axis independently + stuck detection
+        if (step.Type == MacroStepType.MoveTo)
+        {
+            bool xDone = true, yDone = true;
+            var stillNeeded = new System.Collections.Generic.List<string>();
+            var stillCodes = new System.Collections.Generic.List<Key>();
+            var heldCopy = new System.Collections.Generic.List<string>(macro.HeldKeys);
+
+            if (Math.Abs(current.X - step.TargetX) > 5f)
+            {
+                xDone = false;
+                var k = current.X < step.TargetX ? "D" : "A";
+                stillNeeded.Add(k);
+                stillCodes.Add(MapKey(k));
+            }
+            if (Math.Abs(current.Y - step.TargetY) > 5f)
+            {
+                yDone = false;
+                var k = current.Y < step.TargetY ? "S" : "W";
+                stillNeeded.Add(k);
+                stillCodes.Add(MapKey(k));
+            }
+
+            if (xDone && yDone)
+            {
+                ReleaseStepKeys(macro, step);
+                step.Status = "completed";
+                return;
+            }
+
+            // Stuck detection: if not moving for 0.5s, stop
+            if (current.DistanceTo(step.LastCheckPos) < 1f)
+            {
+                step.StuckTimer += delta;
+                if (step.StuckTimer > 0.5)
+                {
+                    ReleaseStepKeys(macro, step);
+                    step.Status = "completed";
+                    step.ErrorMessage = "Stuck (obstacle)";
+                    return;
+                }
+            }
+            else
+            {
+                step.StuckTimer = 0;
+                step.LastCheckPos = current;
+            }
+
+            // Release keys no longer needed, press newly needed ones
+            foreach (var k in heldCopy)
+            {
+                if (!stillNeeded.Contains(k))
+                {
+                    Input.ParseInputEvent(new InputEventKey { Pressed = false, Keycode = MapKey(k) });
+                    macro.HeldKeys.Remove(k);
+                }
+            }
+            foreach (var k in stillNeeded)
+            {
+                if (!macro.HeldKeys.Contains(k))
+                {
+                    Input.ParseInputEvent(new InputEventKey { Pressed = true, Keycode = MapKey(k) });
+                    macro.HeldKeys.Add(k);
+                }
+            }
+            step.Keys = stillNeeded.ToArray();
+            step.KeyCodes = stillCodes.ToArray();
+        }
+        else // move_distance: check single-axis traveled distance
+        {
+            float traveled = step.Direction.ToLower() switch
+            {
+                "right" => current.X - step.StartPosition.X,
+                "left" => step.StartPosition.X - current.X,
+                "up" => step.StartPosition.Y - current.Y,
+                "down" => current.Y - step.StartPosition.Y,
+                _ => 0f
+            };
+
+            if (traveled >= step.Distance)
+            {
+                ReleaseStepKeys(macro, step);
+                step.Status = "completed";
+                return;
+            }
         }
 
         // Safety timeout: 10 seconds
