@@ -357,15 +357,20 @@ public partial class GameMcpServer
         else
         {
             // Non-Control node: recurse looking for Control descendants
-            var childArr = new JsonArray();
+            var childNodes = new List<JsonNode>();
             foreach (var ch in node.GetChildren())
             {
                 var childNode = BuildUITreeNode(ch, visOnly, types, depth);
-                if (childNode != null) childArr.Add(childNode);
+                if (childNode != null) childNodes.Add(childNode);
             }
             // Merge if only one child (skip non-UI intermediate nodes)
-            if (childArr.Count == 1) return childArr[0];
-            if (childArr.Count > 1) return new JsonObject { ["children"] = childArr };
+            if (childNodes.Count == 1) return childNodes[0];
+            if (childNodes.Count > 1)
+            {
+                var arr = new JsonArray();
+                foreach (var cn in childNodes) arr.Add(cn);
+                return new JsonObject { ["children"] = arr };
+            }
             return null;
         }
     }
