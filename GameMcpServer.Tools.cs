@@ -95,9 +95,9 @@ public partial class GameMcpServer
                 a.ContainsKey("x") ? a["x"].GetSingle() : 0f,
                 a.ContainsKey("y") ? a["y"].GetSingle() : 0f));
 
-        Reg("move_mouse", "Move the mouse cursor to screen coordinates.",
-            p("{\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}}", "object"),
-            a => MoveMouse(a["x"].GetSingle(), a["y"].GetSingle()));
+        Reg("move_mouse", "Move the mouse cursor. Without duration: instant teleport. With duration: smooth animated move.",
+            p("{\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"duration\":{\"type\":\"number\"}}", "object"),
+            a => MoveMouseWithOption(a));
 
         Reg("scroll_mouse", "Scroll the mouse wheel. Positive=up, negative=down.",
             p("{\"amount\":{\"type\":\"integer\"}}", "object"),
@@ -341,6 +341,21 @@ public partial class GameMcpServer
                 case TabBar tb: e["tab_count"] = tb.TabCount; e["current_tab"] = tb.CurrentTab; break;
             }
 
+            // Custom control domain data via SetMeta("mcp_data", jsonString)
+            if (c.HasMeta("mcp_data"))
+            {
+                var v = c.GetMeta("mcp_data");
+                if (v.VariantType == Variant.Type.String)
+                {
+                    try
+                    {
+                        var parsed = JsonNode.Parse(v.AsString());
+                        if (parsed is JsonObject obj) e["data"] = obj;
+                    }
+                    catch { }
+                }
+            }
+
             // Recurse into children
             var childArr = new JsonArray();
             int childCount = 0;
@@ -387,8 +402,25 @@ public partial class GameMcpServer
         float oy = args.ContainsKey("offset_y") ? args["offset_y"].GetSingle() : 0f;
         float x = (float)Math.Round(rect.Position.X + rect.Size.X / 2 + ox, 0);
         float y = (float)Math.Round(rect.Position.Y + rect.Size.Y / 2 + oy, 0);
-        string button = args.ContainsKey("button") ? args["button"].GetString() : "left";
-        return ClickMouse(button, "press", x, y);
+
+        // Move virtual cursor
+        _simMousePos = new Vector2(x, y);
+
+        // For buttons, directly emit pressed signal (bypasses CanvasLayer routing issues)
+        if (control is BaseButton bb)
+        {
+            bb.EmitSignal(BaseButton.SignalName.Pressed);
+        }
+        else
+        {
+            // Non-button: try Input.ParseInputEvent (works for controls not on CanvasLayer)
+            string button = args.ContainsKey("button") ? args["button"].GetString() : "left";
+            var btnIdx = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left };
+            Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btnIdx });
+            Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btnIdx });
+        }
+
+        return $"{{\"ok\":true,\"name\":\"{control.Name}\",\"x\":{x},\"y\":{y}}}";
     }
 
     private string TypeText(Dictionary<string, JsonElement> args)
@@ -467,6 +499,7 @@ public partial class GameMcpServer
     {
         try
         {
+            _simMousePos = new Vector2(x, y);
             Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) });
             return $"{{\"ok\":true,\"x\":{x},\"y\":{y}}}";
         }
@@ -477,6 +510,7 @@ public partial class GameMcpServer
     {
         try
         {
+            _simMousePos = new Vector2(x, y);
             var btn = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left };
             for (int i = 0; i < 2; i++)
             {
@@ -616,7 +650,13 @@ public partial class GameMcpServer
     {
         try
         {
-            Input.ParseInputEvent(new InputEventMouseButton { Pressed = action == "press", Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left } });
+            _simMousePos = new Vector2(x, y);
+            var btnIdx = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left };
+            bool pressed = action == "press";
+            Input.ParseInputEvent(new InputEventMouseButton { Pressed = pressed, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btnIdx });
+            // Track simulated button state
+            if (btnIdx == MouseButton.Left) _simMouseLeftDown = pressed;
+            else if (btnIdx == MouseButton.Right) _simMouseRightDown = pressed;
             return $"{{\"ok\":true,\"button\":\"{button}\",\"x\":{x},\"y\":{y}}}";
         }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
@@ -624,9 +664,44 @@ public partial class GameMcpServer
 
     // ── move_mouse ───────────────────────────────────────────────────────
 
+    private string MoveMouseWithOption(Dictionary<string, JsonElement> args)
+    {
+        float x = args["x"].GetSingle();
+        float y = args["y"].GetSingle();
+
+        // If duration provided, use macro for smooth move
+        if (args.ContainsKey("duration") && args["duration"].GetSingle() > 0)
+        {
+            float duration = args["duration"].GetSingle();
+            var id = $"macro_{++_macroCounter:D3}";
+            var steps = new List<MacroStep>
+            {
+                new MacroStep
+                {
+                    Type = MacroStepType.Drag,
+                    X = _simMousePos.X,
+                    Y = _simMousePos.Y,
+                    TargetX = x,
+                    TargetY = y,
+                    Duration = duration,
+                    Button = "none" // no button pressed — just move
+                }
+            };
+            _macros[id] = new MacroRun
+            {
+                Id = id, Name = "move_mouse", Steps = steps, Status = "running",
+                StartTime = Time.GetTicksMsec() / 1000.0
+            };
+            return $"{{\"ok\":true,\"x\":{x},\"y\":{y},\"duration\":{duration},\"macro_id\":\"{id}\"}}";
+        }
+
+        // Instant teleport
+        return MoveMouse(x, y);
+    }
+
     private string MoveMouse(float x, float y)
     {
-        try { Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) }); return $"{{\"ok\":true,\"x\":{x},\"y\":{y}}}"; }
+        try { _simMousePos = new Vector2(x, y); Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) }); return $"{{\"ok\":true,\"x\":{x},\"y\":{y}}}"; }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
     }
 
@@ -708,9 +783,14 @@ public partial class GameMcpServer
 
     private void CreateHealthHud()
     {
-        _healthLabel = new Label { Name = "McpHealthLabel", Position = new Vector2(10, 10), Size = new Vector2(400, 60) };
-        _healthLabel.AddThemeColorOverride("font_color", new Color(0.4f, 1f, 0.6f, 0.8f));
-        _healthLabel.AddThemeFontSizeOverride("font_size", 14);
+        _healthLabel = new Label { Name = "McpHealthLabel" };
+        _healthLabel.SetAnchorsPreset(Control.LayoutPreset.BottomWide);
+        _healthLabel.OffsetLeft = 10;
+        _healthLabel.OffsetTop = -24;
+        _healthLabel.OffsetRight = -10;
+        _healthLabel.OffsetBottom = -2;
+        _healthLabel.AddThemeColorOverride("font_color", new Color(0.4f, 1f, 0.6f, 0.6f));
+        _healthLabel.AddThemeFontSizeOverride("font_size", 12);
         var canvas = new CanvasLayer { Name = "McpHudLayer", Layer = 100 };
         canvas.AddChild(_healthLabel);
         _mainQueue.Enqueue(() => GetTree().Root.CallDeferred("add_child", canvas));
@@ -723,6 +803,59 @@ public partial class GameMcpServer
         var listening = _running ? "ON" : "OFF";
         _healthLabel.Text = $"[MCP] http://localhost:{Port} | {listening}\n" +
                             $"Tools: {_tools.Count} | Metrics: {_metrics.Count} | Macros: {runningMacros} | Reqs: {_requestCount}";
+    }
+
+    // ── virtual cursor ──────────────────────────────────────────────────
+
+    private void CreateVirtualCursor()
+    {
+        if (!ShowCursor) return;
+        _cursorLayer = new CanvasLayer { Name = "McpCursorLayer", Layer = 1000 };
+
+        // Crosshair: two colored lines forming a + shape
+        _cursorCross = new Control { Name = "McpCursor" };
+        _cursorCross.SetAnchorsPreset(Control.LayoutPreset.TopLeft);
+
+        // Horizontal bar (32px wide, 4px tall)
+        var hBar = new ColorRect
+        {
+            Name = "HBar",
+            Color = new Color(1f, 0.2f, 0.8f, 0.95f),
+            Size = new Vector2(32, 4),
+            Position = new Vector2(-16, -2)
+        };
+        _cursorCross.AddChild(hBar);
+
+        // Vertical bar (4px wide, 32px tall)
+        var vBar = new ColorRect
+        {
+            Name = "VBar",
+            Color = new Color(1f, 0.2f, 0.8f, 0.95f),
+            Size = new Vector2(4, 32),
+            Position = new Vector2(-2, -16)
+        };
+        _cursorCross.AddChild(vBar);
+
+        // Center dot (6x6)
+        var dot = new ColorRect
+        {
+            Name = "Dot",
+            Color = new Color(1f, 1f, 1f, 1f),
+            Size = new Vector2(6, 6),
+            Position = new Vector2(-3, -3)
+        };
+        _cursorCross.AddChild(dot);
+
+        _cursorLayer.AddChild(_cursorCross);
+        _mainQueue.Enqueue(() => GetTree().Root.CallDeferred("add_child", _cursorLayer));
+    }
+
+    private void UpdateVirtualCursor()
+    {
+        if (!ShowCursor) return;
+        if (_cursorCross == null) CreateVirtualCursor();
+        if (_cursorCross == null) return;
+        _cursorCross.Position = _simMousePos;
     }
 
     // ── metrics sampling ─────────────────────────────────────────────────

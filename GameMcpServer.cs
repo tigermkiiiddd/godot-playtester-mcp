@@ -61,6 +61,21 @@ public partial class GameMcpServer : Node
     private Label _healthLabel;
     private int _requestCount;
 
+    // Virtual cursor
+    [Export] public bool ShowCursor = true;
+    private CanvasLayer _cursorLayer;
+    private Control _cursorCross;
+    private Vector2 _simMousePos = new(-100, -100); // off-screen until first use
+    private bool _simMouseLeftDown;   // simulated left button state
+    private bool _simMouseRightDown;  // simulated right button state
+    private bool _prevMouseLeftDown;  // previous frame state (for edge detection)
+
+    // Public accessors for game scripts to poll simulated mouse
+    public Vector2 SimMousePos => _simMousePos;
+    public bool SimMouseLeftDown => _simMouseLeftDown;
+    public bool SimMouseLeftJustPressed => _simMouseLeftDown && !_prevMouseLeftDown;
+    public bool SimMouseLeftJustReleased => !_simMouseLeftDown && _prevMouseLeftDown;
+
     // Thread-safe action queue (HTTP thread → main thread)
     private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _mainQueue = new();
 
@@ -86,10 +101,12 @@ public partial class GameMcpServer : Node
     {
         while (_mainQueue.TryDequeue(out var action))
             action();
+        _prevMouseLeftDown = _simMouseLeftDown; // track edge before processing
         SampleMetrics(delta);
         UpdateTests(delta);
         UpdateMacros(delta);
         UpdateHealthHud();
+        UpdateVirtualCursor();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
