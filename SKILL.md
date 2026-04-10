@@ -20,7 +20,7 @@ Embeds an MCP server into a Godot 4 (.NET) game. AI agents can query game state,
 
 Read `${CLAUDE_SKILL_DIR}/deploy.md` for the full deployment guide. Summary:
 
-1. Copy `GameMcpServer.cs` into the project
+1. Copy all `GameMcpServer*.cs` files (6 partial classes) into the project
 2. Add as Autoload in Project Settings
 3. Tag game objects with Godot Groups (see Protocol below)
 4. Run the game — MCP server starts on `http://localhost:9876`
@@ -150,6 +150,32 @@ private void RegisterMcpMetrics()
 | `start_test` | Start background test scene | `scene_path`, `duration`, `capture_frames` |
 | `get_test_results` | Get test results | `test_id`, `include` (all/metrics/screenshots/logs) |
 
+### Macro System (scripted input sequences)
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `execute_macro` | Execute a timed input sequence. Returns `macro_id` immediately. | `steps` (array), `name` (optional) |
+| `get_macro_status` | Get progress of a running macro | `macro_id`, `include` (all/steps) |
+| `cancel_macro` | Cancel running macro, release all held keys | `macro_id` |
+| `list_macros` | List macros, optionally filtered by status | `status` (running/completed/cancelled/error) |
+
+**Step action types**: `hold_key` (press for duration), `tap_key` (instant press+release), `repeat_key` (press N times with interval), `combo_keys` (multiple keys simultaneously), `move_distance` (hold direction until player moves X pixels), `click` (mouse), `wait` (delay).
+
+```json
+// Example: diagonal walk 0.5s → wait 0.3s → attack
+{"steps": [
+  {"action": "combo_keys", "keys": "W,D", "duration": 0.5},
+  {"action": "wait", "delay": 0.3},
+  {"action": "tap_key", "keys": "F"}
+]}
+
+// Example: repeat attack 10 times
+{"steps": [{"action": "repeat_key", "keys": "F", "count": 10, "interval": 0.5}]}
+
+// Example: move right 200 pixels
+{"steps": [{"action": "move_distance", "direction": "right", "distance": 200}]}
+```
+
 ### Node Manipulation
 
 | Tool | Description | Parameters |
@@ -186,6 +212,19 @@ When testing a game, follow this priority:
 6. Analyze metrics_timeline: who died first? HP curves?
 ```
 
+### Example: Agent walks and attacks using macro
+
+```
+1. get_game_state() → see enemy at distance
+2. execute_macro(name="approach_and_attack", steps=[
+     {"action": "hold_key", "keys": "W", "duration": 1.5},
+     {"action": "wait", "delay": 0.2},
+     {"action": "tap_key", "keys": "F"}
+   ]) → macro_001 running
+3. get_macro_status(macro_id="macro_001") → wait for completion
+4. get_game_state() → verify enemy dead or player position changed
+```
+
 ## Connecting Claude Code
 
 ```json
@@ -197,4 +236,202 @@ When testing a game, follow this priority:
     }
   }
 }
+```
+
+## Minimal Quick-Start Example
+
+A complete working test: WASD player with trail, MCP reads position and controls movement.
+
+### 1. Scene Structure (created via Godot MCP `create_scene` + `add_node`)
+
+```
+TrailTest (Node2D)
+├── Player (CharacterBody2D) [group: "player"]
+│   ├── CollisionShape2D
+│   │   └── Shape: RectangleShape2D (4x4)
+│   └── TrailLine (Line2D)
+├── Background (ColorRect)
+└── Camera2D
+```
+
+### 2. Player Script (`scripts/Player.cs`)
+
+```csharp
+using Godot;
+using System.Collections.Generic;
+
+public partial class Player : CharacterBody2D
+{
+    [Export] public float Speed { get; set; } = 200f;
+    [Export] public float TrailInterval { get; set; } = 0.05f;
+
+    private float _trailTimer;
+    private readonly List<Vector2> _trailPoints = new();
+    private const int MaxTrailPoints = 200;
+
+    public override void _Ready()
+    {
+        AddToGroup("player");
+        CallDeferred(MethodName.RegisterMcpMetrics);
+    }
+
+    public override void _PhysicsProcess(double delta)
+    {
+        var input = Vector2.Zero;
+        if (Input.IsKeyPressed(Key.W)) input.Y -= 1;
+        if (Input.IsKeyPressed(Key.S)) input.Y += 1;
+        if (Input.IsKeyPressed(Key.A)) input.X -= 1;
+        if (Input.IsKeyPressed(Key.D)) input.X += 1;
+
+        Velocity = input.Normalized() * Speed;
+        MoveAndSlide();
+
+        if (Velocity.LengthSquared() > 1f)
+        {
+            _trailTimer += (float)delta;
+            if (_trailTimer >= TrailInterval)
+            {
+                _trailTimer = 0f;
+                _trailPoints.Add(GlobalPosition);
+                if (_trailPoints.Count > MaxTrailPoints)
+                    _trailPoints.RemoveAt(0);
+            }
+        }
+
+        var trail = GetNodeOrNull<Line2D>("TrailLine");
+        if (trail != null)
+        {
+            trail.ClearPoints();
+            foreach (var pt in _trailPoints)
+                trail.AddPoint(ToLocal(pt));
+        }
+    }
+
+    private void RegisterMcpMetrics()
+    {
+        if (GameMcpServer.Instance == null) return;
+        GameMcpServer.Instance.RegisterMetric("player_x", () => GlobalPosition.X);
+        GameMcpServer.Instance.RegisterMetric("player_y", () => GlobalPosition.Y);
+        GameMcpServer.Instance.RegisterMetric("trail_length", () => _trailPoints.Count);
+        GameMcpServer.Instance.RegisterMetric("speed", () => Velocity.Length());
+    }
+}
+```
+
+### 3. Verify via curl
+
+```bash
+# Read state → Player at (0,0)
+curl -s -X POST http://localhost:9876 -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_game_state","arguments":{}}}'
+
+# Move player up for 1 second
+curl -s ... -d '{"...press_key...W...press"}'
+sleep 1
+curl -s ... -d '{"...press_key...W...release"}'
+
+# Read metrics → player_y changed, trail_length > 0
+curl -s ... -d '{"...get_metrics...latest"}'
+# Result: {"player_x":0,"player_y":-256.667,"trail_length":25,"speed":0}
+```
+
+## Pitfalls & Gotchas
+
+### CRITICAL: JsonNode Parent Ownership Bug
+
+**Symptom**: Every MCP request returns `InvalidOperationException: "The node already has a parent."`
+
+**Root cause**: `System.Text.Json.Nodes.JsonNode` cannot be inserted into two different parent objects. In `RpcResult` / `RpcError`, the `id` parsed from the request JSON already belongs to the request's `JsonObject`. Reusing it in a new `JsonObject` triggers the exception.
+
+```csharp
+// WRONG — id already has a parent (the parsed request JSON)
+new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ... }
+
+// CORRECT — DeepClone before inserting
+new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id?.DeepClone(), ... }
+```
+
+This error is **extremely misleading** — it looks like a Godot scene tree error but is actually a `System.Text.Json` error. The stack trace reveals `System.Text.Json.Nodes.JsonNode.AssignParent`.
+
+### Don't Re-register Metrics Every Frame
+
+**Wrong**: Calling `RegisterMetric()` inside `_PhysicsProcess()` or `_Process()`. This creates duplicate metric entries and wastes memory every frame.
+
+**Correct**: Register once in `_Ready()` via `CallDeferred()`:
+```csharp
+public override void _Ready()
+{
+    CallDeferred(MethodName.RegisterMcpMetrics);
+}
+```
+
+### Line2D Trail Must Use ToLocal()
+
+When a `Line2D` is a child of a moving `CharacterBody2D`, adding points as raw `GlobalPosition` will produce incorrect visual results because points are in local space relative to the parent.
+
+```csharp
+// WRONG — points drift as player moves
+trail.AddPoint(pt);
+
+// CORRECT — convert world position to local
+trail.AddPoint(ToLocal(pt));
+```
+
+### Thread Safety: ConcurrentQueue, Not CallDeferred
+
+The MCP HTTP server runs on a background thread. All Godot API calls must be marshaled to the main thread. Use `ConcurrentQueue<Action>` drained in `_Process()`, not `Callable.From().CallDeferred()` (which can deadlock when combined with `ManualResetEventSlim`).
+
+```csharp
+// HTTP thread: enqueue action
+_mainQueue.Enqueue(() => { result = handler(args); done.Set(); });
+
+// Main thread: drain in _Process
+while (_mainQueue.TryDequeue(out var action))
+    action();
+```
+
+### Godot 4.6 C# API Changes
+
+Several APIs changed from older Godot 4.x versions:
+
+| Old (broken) | New (Godot 4.6) |
+|---|---|
+| `Camera2D.UnprojectPosition()` | `camera.GetScreenTransform() * pos` |
+| `Node.Visible` | `node is CanvasItem ci && ci.Visible` |
+| `Control.Disabled` | Only on `BaseButton`, not all `Control` |
+| `Input.AccumulateInput()` | Removed — `ParseInputEvent()` is sufficient |
+| `Node.Set(prop, val)` | `node.Set(new StringName(prop), Variant.From(val))` |
+| `CallDeferred(MethodGroup)` | `CallDeferred(MethodName.Method)` |
+| `img.SaveJpgToBuffer(buf)` | `img.SaveJpgToBuffer()` (returns byte[]) |
+
+### CheckBox/OptionButton Switch Ordering
+
+`CheckBox` and `OptionButton` inherit from `Button`. In a `switch` statement, they must be checked BEFORE `Button`, or the `Button` case will catch them.
+
+```csharp
+switch (child)
+{
+    case CheckBox cb: ... break;   // Specific types FIRST
+    case OptionButton ob: ... break;
+    case Button b: ... break;      // Base type LAST
+    case Label l: ... break;
+}
+```
+
+### Scene Files: Always Use Godot MCP to Create
+
+Never hand-write `.tscn` files. The format requires proper UIDs and resource references that are easy to get wrong. Use the Godot MCP (`create_scene`, `add_node`) to create scenes programmatically.
+
+### CRITICAL: JsonElement Extraction for Array Parameters
+
+**Symptom**: `InvalidOperationException: "The node must be of type 'JsonValue'"` when calling tools with array parameters (like `execute_macro` with `steps`).
+
+**Root cause**: `JsonNode.GetValue<JsonElement>()` only works on `JsonValue` leaf nodes. It throws on `JsonArray` or `JsonObject` nodes.
+
+```csharp
+// WRONG — fails for array/object parameters
+args[kv.Key] = kv.Value.GetValue<JsonElement>();
+
+// CORRECT — serialize and deserialize to get a clean JsonElement
+args[kv.Key] = JsonSerializer.Deserialize<JsonElement>(kv.Value.ToJsonString());
 ```
