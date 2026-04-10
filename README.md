@@ -2,15 +2,24 @@
 
 Embed an MCP (Model Context Protocol) server into a running Godot 4 (.NET) game. AI agents can inspect game state, simulate input, execute scripted macros, capture screenshots, monitor metrics, and run automated tests — all while the game is running.
 
+## Zero-Intrusion Design
+
+Copy 6 files into `addons/game_mcp/`, register as Autoload, done. No architecture changes, no new dependencies, no base classes to inherit. Game code runs exactly as before — MCP is just a passive observer.
+
+**Minimal game code changes:**
+- Tag game objects with Groups: `AddToGroup("player")` — one line per object
+- Name UI controls descriptively — you should do this anyway
+- Optionally register metrics or expose custom data via `SetMeta("mcp_data", ...)`
+
 ## How It Works
 
-1. Add the `GameMcpServer` partial class files to your Godot project
-2. Register as an Autoload in Project Settings
+1. Copy all `GameMcpServer*.cs` files (6 partial classes) into your project
+2. Register `GameMcpServer` as Autoload in Project Settings
 3. Tag game objects with Godot Groups (`player`, `enemies`, `items`, etc.)
 4. Run the game — MCP server starts on `http://localhost:9876`
-5. AI agents (Claude Code, etc.) connect and control the game
+5. AI agents connect via MCP adapter and control the game
 
-## 27 Built-in Tools
+## 34 Built-in Tools
 
 ### State & Structure
 `get_game_state` `get_ui_layout` `get_scene_tree` `get_node_properties` `get_game_info`
@@ -38,14 +47,6 @@ Supports: `hold_key`, `tap_key`, `repeat_key`, `combo_keys`, `move_distance`, `m
 ### Node Manipulation
 `set_node_property` `call_node_method`
 
-## Quick Example
-
-```bash
-# Walk forward for 1.5 seconds, then attack
-curl -s -X POST http://localhost:9876 -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute_macro","arguments":{"name":"walk_and_attack","steps":[{"action":"hold_key","keys":"W","duration":1.5},{"action":"tap_key","keys":"F"}]}}}'
-```
-
 ## Connect Claude Code
 
 ```json
@@ -63,16 +64,16 @@ curl -s -X POST http://localhost:9876 -H "Content-Type: application/json" \
 
 | File | Purpose |
 |------|---------|
-| `GameMcpServer.cs` | Core: Node lifecycle, public API |
-| `GameMcpServer.Http.cs` | HTTP server, MCP protocol |
-| `GameMcpServer.Tools.cs` | Built-in tool implementations |
-| `GameMcpServer.MacroTypes.cs` | Macro data types |
-| `GameMcpServer.Macro.cs` | Macro execution engine |
-| `GameMcpServer.MacroTools.cs` | Macro MCP tools |
-| `SKILL.md` | Full documentation |
-| `deploy.md` | Deployment guide |
+| `GameMcpServer.cs` | Core: Node lifecycle, public API, JSON options |
+| `GameMcpServer.Http.cs` | HTTP server, MCP JSON-RPC protocol |
+| `GameMcpServer.Tools.cs` | 34 built-in tool implementations |
+| `GameMcpServer.MacroTypes.cs` | Macro step data types |
+| `GameMcpServer.Macro.cs` | Macro execution engine (runs in _Process) |
+| `GameMcpServer.MacroTools.cs` | Macro MCP tools (execute/cancel/list) |
+| `SKILL.md` | Full documentation with conventions and pitfalls |
+| `deploy.md` | Step-by-step deployment guide |
 
 ## Requirements
 
-- Godot 4 with .NET support
+- Godot 4.6+ with .NET support
 - Game uses C# scripts
