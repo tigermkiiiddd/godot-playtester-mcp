@@ -85,6 +85,56 @@ var hpBar = new ProgressBar { Name = "HPBar", MaxValue = 100, Value = 85 };
 var scoreLabel = new Label { Name = "ScoreLabel", Text = "Score: 1520" };
 ```
 
+### Custom Control Data Convention (mcp_data)
+
+Custom controls can expose domain-specific data to `get_ui_layout` via `SetMeta("mcp_data", jsonString)`. This appears as a `"data"` field in the UI tree output.
+
+```csharp
+// Example: inventory cell exposing item details
+public void Refresh()
+{
+    SetMeta("mcp_data", new JsonObject
+    {
+        ["item_name"] = ItemName,
+        ["item_icon"] = "iron_sword",
+        ["item_count"] = ItemCount,
+        ["item_rarity"] = "common",
+        ["item_type"] = "weapon",
+        ["item_description"] = "A basic iron sword",
+        ["item_weight"] = 3.5,
+        ["item_value"] = 120,
+    }.ToJsonString());
+}
+```
+
+`get_ui_layout` will return this cell with:
+```json
+{"type": "InventoryCell", "name": "格_0_0", "rect": [...], "data": {"item_name": "铁剑", "item_icon": "iron_sword", ...}}
+```
+
+### Mouse Polling for Drag-and-Drop
+
+`Input.ParseInputEvent` does NOT route events to CanvasLayer children. For drag-and-drop in CanvasLayer-based UI, game scripts should poll the simulated mouse state:
+
+```csharp
+var mcp = GameMcpServer.Instance;
+if (mcp == null) return;
+
+var mousePos = mcp.SimMousePos;             // Current virtual mouse position
+bool leftDown = mcp.SimMouseLeftDown;        // Is left button held?
+bool justPressed = mcp.SimMouseLeftJustPressed;   // Was left button pressed this frame?
+bool justReleased = mcp.SimMouseLeftJustReleased; // Was left button released this frame?
+
+if (justPressed && !_dragging)
+{
+    var cell = HitTestCell(mousePos);
+    if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
+        StartDrag(cell, mousePos);
+}
+```
+
+For buttons, `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which bypasses the CanvasLayer routing issue.
+
 ### Metric Registration Convention
 
 Register numeric metrics for time-series monitoring during tests.
@@ -161,7 +211,7 @@ GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
 |------|-------------|------------|
 | `press_key` | Raw keyboard key (W, Space, Escape, etc) | `key`, `action` (press/release) |
 | `click_mouse` | Mouse button at screen coords | `button` (left/right/middle), `action`, `x`, `y` |
-| `move_mouse` | Move mouse cursor | `x`, `y` |
+| `move_mouse` | Move mouse cursor. Without `duration`: instant teleport. With `duration`: smooth animated move. | `x`, `y`, `duration` |
 | `scroll_mouse` | Mouse wheel | `amount` (int) |
 | `simulate_input` | Mapped action (ui_up, ui_accept) | `action`, `key` |
 
@@ -406,6 +456,14 @@ curl -s ... -d '{"...get_metrics...latest"}'
 ```
 
 ## Pitfalls & Gotchas
+
+### CRITICAL: CanvasLayer Input Routing
+
+`Input.ParseInputEvent` does NOT route events to children of `CanvasLayer`. This means `click_mouse` and simulated clicks on CanvasLayer-based UI will not work through the normal input pipeline.
+
+**Solutions:**
+1. For buttons: `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which bypasses the routing issue.
+2. For drag-and-drop: Game scripts should poll `GameMcpServer.Instance.SimMousePos`, `SimMouseLeftDown`, `SimMouseLeftJustPressed`, `SimMouseLeftJustReleased` in `_Process()`.
 
 ### CRITICAL: JsonNode Parent Ownership Bug
 
