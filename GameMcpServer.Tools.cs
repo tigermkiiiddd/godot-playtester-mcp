@@ -101,6 +101,38 @@ public partial class GameMcpServer
             p("{\"test_id\":{\"type\":\"string\"},\"include\":{\"type\":\"string\"}}", "object", new[] { "test_id" }),
             a => GetTestResults(a["test_id"].GetString(),
                 a.ContainsKey("include") ? a["include"].GetString() : "all"));
+
+        // ── Log Capture ──────────────────────────────────────────────────
+
+        Reg("get_logs",
+            "Get AI log entries (important game events). Filter by level, category, time.",
+            p("{\"min_level\":{\"type\":\"string\"},\"category\":{\"type\":\"string\"},\"since\":{\"type\":\"number\"},\"limit\":{\"type\":\"integer\"},\"order\":{\"type\":\"string\"}}", "object"),
+            a => GetLogs(a, LogType.AI));
+
+        Reg("get_debug_logs",
+            "Get debug log entries (game's GD.Print replacement). Filter by level, time.",
+            p("{\"min_level\":{\"type\":\"string\"},\"since\":{\"type\":\"number\"},\"limit\":{\"type\":\"integer\"}}", "object"),
+            a => GetLogs(a, LogType.Debug));
+
+        Reg("log",
+            "Write a log entry from the AI agent into the AI log buffer.",
+            p("{\"message\":{\"type\":\"string\"},\"level\":{\"type\":\"string\"},\"category\":{\"type\":\"string\"}}", "object", new[] { "message" }),
+            a => AgentLog(a));
+
+        Reg("get_file_logs",
+            "Read recent entries from a file log category. Returns last N lines.",
+            p("{\"category\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}}", "object", new[] { "category" }),
+            a => GetFileLogs(a));
+
+        Reg("get_file_log_summary",
+            "Get summary statistics for file logs: entry counts, time range per category.",
+            p("{}", "object"),
+            _ => GetFileLogSummary());
+
+        Reg("clear_logs",
+            "Clear all AI and Debug log ring buffers.",
+            p("{}", "object"),
+            _ => { ClearLogs(); return "{\"ok\":true}"; });
     }
 
     // Helper for concise tool registration
@@ -447,7 +479,6 @@ public partial class GameMcpServer
             StartTime = Time.GetTicksMsec() / 1000.0,
             MetricsSnapshot = new(), Screenshots = new(), Logs = new()
         };
-        _captureLogs = true;
         GD.Print($"[GameMcp] Test started: {id} scene={scene} duration={dur}s");
         return $"{{\"test_id\":\"{id}\",\"scene\":\"{scene}\",\"duration\":{dur}}}";
     }
@@ -470,11 +501,9 @@ public partial class GameMcpServer
                     catch { }
                 }
             }
-            if (_capturedLogs.Count > 0) { t.Logs.AddRange(_capturedLogs); _capturedLogs.Clear(); }
-
             if (elapsed >= t.MaxDuration)
             {
-                t.Status = "completed"; t.Duration = elapsed; _captureLogs = false;
+                t.Status = "completed"; t.Duration = elapsed;
                 foreach (var mk in _metricHistory) t.MetricsSnapshot[mk.Key] = new List<MetricSample>(mk.Value);
                 int pass = 0, fail = 0; var failures = new List<string>();
                 foreach (var log in t.Logs) { if (log.Contains("ASSERT PASS")) pass++; if (log.Contains("ASSERT FAIL")) { fail++; failures.Add(log); } }
@@ -594,5 +623,101 @@ public partial class GameMcpServer
             ["tools_count"] = _tools.Count,
             ["metrics_count"] = _metrics.Count,
         });
+    }
+
+    // ── log tools ───────────────────────────────────────────────────────
+
+    private string GetLogs(Dictionary<string, JsonElement> args, LogType type)
+    {
+        var (ring, head, count, cap) = type == LogType.Debug
+            ? (_debugLogRing, _debugLogHead, _debugLogCount, DEBUG_LOG_CAPACITY)
+            : (_aiLogRing, _aiLogHead, _aiLogCount, AI_LOG_CAPACITY);
+
+        var minLevel = args.ContainsKey("min_level")
+            ? Enum.Parse<LogLevel>(args["min_level"].GetString(), true)
+            : (type == LogType.Debug ? LogLevel.Debug : LogLevel.Info);
+        string catFilter = args.ContainsKey("category") ? args["category"].GetString()?.ToLowerInvariant() : null;
+        double? since = args.ContainsKey("since") ? args["since"].GetDouble() : null;
+        int limit = args.ContainsKey("limit") ? args["limit"].GetInt32() : 100;
+        string order = args.ContainsKey("order") ? args["order"].GetString() : "desc";
+
+        var matching = new List<LogEntry>();
+        int start = (head - count + cap) % cap;
+        for (int i = 0; i < count; i++)
+        {
+            int idx = (start + i) % cap;
+            var e = ring[idx];
+            if (e.Level < minLevel) continue;
+            if (catFilter != null && !e.Category.ToLowerInvariant().Contains(catFilter)) continue;
+            if (since.HasValue && e.Timestamp < since.Value) continue;
+            matching.Add(e);
+        }
+
+        var result = order == "asc"
+            ? matching.Skip(Math.Max(0, matching.Count - limit)).Take(limit)
+            : Enumerable.Reverse(matching).Take(limit);
+
+        var arr = new JsonArray();
+        foreach (var e in result)
+            arr.Add(new JsonObject { ["level"] = e.Level.ToString().ToUpperInvariant(), ["time"] = Math.Round(e.Timestamp, 3), ["category"] = e.Category, ["message"] = e.Message });
+
+        return JsonSerializer.Serialize(new JsonObject { ["count"] = arr.Count, ["total_in_buffer"] = count, ["entries"] = arr });
+    }
+
+    private string AgentLog(Dictionary<string, JsonElement> args)
+    {
+        var msg = args["message"].GetString();
+        var level = args.ContainsKey("level") ? Enum.Parse<LogLevel>(args["level"].GetString(), true) : LogLevel.Info;
+        var category = args.ContainsKey("category") ? args["category"].GetString() : "agent";
+        Log(category, msg, level);
+        return $"{{\"ok\":true,\"category\":\"{category}\",\"level\":\"{level}\"}}";
+    }
+
+    private string GetFileLogs(Dictionary<string, JsonElement> args)
+    {
+        var category = args["category"].GetString();
+        int limit = args.ContainsKey("limit") ? args["limit"].GetInt32() : 50;
+        try
+        {
+            var dir = System.IO.Path.Combine(Godot.ProjectSettings.GlobalizePath("user://"), "mcp_logs");
+            var files = System.IO.Directory.GetFiles(dir, $"{category}_*.log").OrderBy(f => f).ToList();
+            if (files.Count == 0) return $"{{\"count\":0,\"entries\":[]}}";
+
+            // Read last N lines from the latest file
+            var lines = new List<string>();
+            for (int fi = files.Count - 1; fi >= 0 && lines.Count < limit; fi--)
+            {
+                var fileLines = System.IO.File.ReadAllLines(files[fi]);
+                for (int li = fileLines.Length - 1; li >= 0 && lines.Count < limit; li--)
+                    if (!string.IsNullOrWhiteSpace(fileLines[li]))
+                        lines.Add(fileLines[li]);
+            }
+            lines.Reverse();
+
+            var arr = new JsonArray();
+            foreach (var l in lines) arr.Add(l);
+            return JsonSerializer.Serialize(new JsonObject { ["count"] = arr.Count, ["entries"] = arr });
+        }
+        catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
+    }
+
+    private string GetFileLogSummary()
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(Godot.ProjectSettings.GlobalizePath("user://"), "mcp_logs");
+            if (!System.IO.Directory.Exists(dir)) return "{\"categories\":[]}";
+            var files = System.IO.Directory.GetFiles(dir, "*.log");
+            var groups = files.GroupBy(f => System.IO.Path.GetFileName(f).Split('_')[0]);
+            var arr = new JsonArray();
+            foreach (var g in groups)
+            {
+                long totalSize = g.Sum(f => new System.IO.FileInfo(f).Length);
+                int totalLines = g.Sum(f => System.IO.File.ReadAllLines(f).Length);
+                arr.Add(new JsonObject { ["category"] = g.Key, ["files"] = g.Count(), ["entries"] = totalLines, ["size_bytes"] = totalSize });
+            }
+            return JsonSerializer.Serialize(new JsonObject { ["categories"] = arr });
+        }
+        catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
     }
 }

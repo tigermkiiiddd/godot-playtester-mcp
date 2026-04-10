@@ -49,8 +49,13 @@ public partial class GameMcpServer : Node
     internal int _macroCounter;
 
     // Log capture
-    private readonly List<string> _capturedLogs = new();
-    private bool _captureLogs;
+    private const int AI_LOG_CAPACITY = 1000;
+    private const int DEBUG_LOG_CAPACITY = 2000;
+    private readonly LogEntry[] _aiLogRing = new LogEntry[AI_LOG_CAPACITY];
+    private int _aiLogHead, _aiLogCount;
+    private readonly LogEntry[] _debugLogRing = new LogEntry[DEBUG_LOG_CAPACITY];
+    private int _debugLogHead, _debugLogCount;
+    private readonly Dictionary<string, System.IO.StreamWriter> _fileWriters = new();
 
     // HUD
     private Label _healthLabel;
@@ -128,6 +133,66 @@ public partial class GameMcpServer : Node
             return node == null ? "node_not_found" : node.Get(propertyName);
         }, sampleRate);
     }
+
+    // ── Logging API ───────────────────────────────────────────────────
+
+    /// <summary>Log an important game event to the AI ring buffer (1000 entries).</summary>
+    public void Log(string category, string message, LogLevel level = LogLevel.Info)
+    {
+        var entry = new LogEntry(LogType.AI, level, Time.GetTicksMsec() / 1000.0, category, message);
+        WriteToRing(_aiLogRing, ref _aiLogHead, ref _aiLogCount, AI_LOG_CAPACITY, entry);
+        // Auto-capture to running tests
+        foreach (var kv in _tests)
+            if (kv.Value.Status == "running")
+                kv.Value.Logs.Add($"[{level}] [{category}] {message}");
+    }
+
+    /// <summary>Log a warning.</summary>
+    public void LogWarn(string category, string message) => Log(category, message, LogLevel.Warn);
+
+    /// <summary>Log an error.</summary>
+    public void LogError(string category, string message) => Log(category, message, LogLevel.Error);
+
+    /// <summary>Log high-volume data to a file (user://mcp_logs/category_date.log).</summary>
+    public void FileLog(string category, string message)
+    {
+        try
+        {
+            var dir = System.IO.Path.Combine(Godot.ProjectSettings.GlobalizePath("user://"), "mcp_logs");
+            System.IO.Directory.CreateDirectory(dir);
+            var date = DateTime.Now.ToString("yyyyMMdd");
+            var path = System.IO.Path.Combine(dir, $"{category}_{date}.log");
+            if (!_fileWriters.TryGetValue(path, out var writer) || writer.BaseStream == null)
+            {
+                writer = new System.IO.StreamWriter(path, append: true) { AutoFlush = true };
+                _fileWriters[path] = writer;
+            }
+            var ts = Math.Round(Time.GetTicksMsec() / 1000.0, 3);
+            writer.WriteLine($"{{\"time\":{ts},\"msg\":\"{message.Replace("\"", "\\\"")}\"}}");
+        }
+        catch { /* file log is best-effort */ }
+    }
+
+    /// <summary>Capture a debug log message (replaces GD.Print for MCP visibility).</summary>
+    public void DebugLog(string message, LogLevel level = LogLevel.Debug)
+    {
+        var entry = new LogEntry(LogType.Debug, level, Time.GetTicksMsec() / 1000.0, "debug", message);
+        WriteToRing(_debugLogRing, ref _debugLogHead, ref _debugLogCount, DEBUG_LOG_CAPACITY, entry);
+    }
+
+    /// <summary>Clear all ring buffers.</summary>
+    public void ClearLogs()
+    {
+        _aiLogHead = _aiLogCount = 0;
+        _debugLogHead = _debugLogCount = 0;
+    }
+
+    private static void WriteToRing(LogEntry[] ring, ref int head, ref int count, int capacity, LogEntry entry)
+    {
+        ring[head] = entry;
+        head = (head + 1) % capacity;
+        if (count < capacity) count++;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -171,4 +236,21 @@ public class TestRun
     public int AssertPassed;
     public int AssertFailed;
     public List<string> AssertFailures;
+}
+
+// ── Log Types ─────────────────────────────────────────────────────
+
+public enum LogLevel { Debug = 0, Info = 1, Warn = 2, Error = 3 }
+public enum LogType { AI = 0, File = 1, Debug = 2 }
+
+public struct LogEntry
+{
+    public LogType Type;
+    public LogLevel Level;
+    public double Timestamp;
+    public string Category;
+    public string Message;
+
+    public LogEntry(LogType type, LogLevel level, double timestamp, string category, string message)
+    { Type = type; Level = level; Timestamp = timestamp; Category = category; Message = message; }
 }

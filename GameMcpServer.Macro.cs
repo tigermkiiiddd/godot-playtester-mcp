@@ -46,7 +46,7 @@ public partial class GameMcpServer
                     macro.Status = "error";
                     macro.ErrorMessage = step.ErrorMessage;
                     ReleaseAllKeys(macro);
-                    GD.PrintErr($"[GameMcp] Macro error: {macro.Id} step {macro.CurrentStepIndex}: {step.ErrorMessage}");
+                    LogError("macro", $"Macro error: {macro.Id} step {macro.CurrentStepIndex}: {step.ErrorMessage}");
                     continue;
                 }
                 macro.CurrentStepIndex++;
@@ -392,7 +392,7 @@ public partial class GameMcpServer
         macro.Status = "completed";
         macro.Duration = Time.GetTicksMsec() / 1000.0 - macro.StartTime;
         ReleaseAllKeys(macro);
-        GD.Print($"[GameMcp] Macro done: {macro.Id} steps={macro.Steps.Count} duration={macro.Duration:F1}s");
+        Log("macro", $"Macro done: {macro.Id} name={macro.Name} steps={macro.Steps.Count} duration={macro.Duration:F1}s");
     }
 
     private void CancelMacroRun(MacroRun macro)
@@ -404,5 +404,6 @@ public partial class GameMcpServer
         ReleaseAllKeys(macro);
         macro.Status = "cancelled";
         macro.Duration = Time.GetTicksMsec() / 1000.0 - macro.StartTime;
+        Log("macro", $"Macro cancelled: {macro.Id}");
     }
 }
