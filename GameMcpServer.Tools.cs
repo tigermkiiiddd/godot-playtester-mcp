@@ -244,7 +244,7 @@ public partial class GameMcpServer
             foreach (var n in paged) items.Add(BuildNodeInfo(n, camera, p2d));
             result[g] = new JsonObject { ["total"] = filtered.Count, ["returned"] = paged.Count, ["items"] = items };
         }
-        return JsonSerializer.Serialize(result);
+        return JsonSerializer.Serialize(result, JsonOpts);
     }
 
     private static JsonNode BuildNodeInfo(Node2D node, Camera2D camera, Node2D player)
@@ -291,7 +291,7 @@ public partial class GameMcpServer
             var sub = BuildUITreeNode(child, visOnly, types, 0);
             if (sub != null) roots.Add(sub);
         }
-        return JsonSerializer.Serialize(new JsonObject { ["roots"] = roots });
+        return JsonSerializer.Serialize(new JsonObject { ["roots"] = roots }, JsonOpts);
     }
 
     private JsonNode BuildUITreeNode(Node node, bool visOnly, string[] types, int depth)
@@ -471,7 +471,7 @@ public partial class GameMcpServer
             ["path"] = focused.GetPath().ToString(),
             ["rect"] = new JsonArray { Math.Round(r.Position.X, 0), Math.Round(r.Position.Y, 0), Math.Round(r.Size.X, 0), Math.Round(r.Size.Y, 0) }
         };
-        return JsonSerializer.Serialize(o);
+        return JsonSerializer.Serialize(o, JsonOpts);
     }
 
     private string SelectOption(Dictionary<string, JsonElement> args)
@@ -613,7 +613,7 @@ public partial class GameMcpServer
         {
             var img = GetViewport().GetTexture().GetImage();
             byte[] buf = format == "png" ? img.SavePngToBuffer() : img.SaveJpgToBuffer();
-            return JsonSerializer.Serialize(new JsonObject { ["format"] = format, ["width"] = img.GetWidth(), ["height"] = img.GetHeight(), ["size_bytes"] = buf.Length, ["data"] = Convert.ToBase64String(buf) });
+            return JsonSerializer.Serialize(new JsonObject { ["format"] = format, ["width"] = img.GetWidth(), ["height"] = img.GetHeight(), ["size_bytes"] = buf.Length, ["data"] = Convert.ToBase64String(buf) }, JsonOpts);
         }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
     }
@@ -765,7 +765,7 @@ public partial class GameMcpServer
                     result[k] = FmtVal(last); break;
             }
         }
-        return JsonSerializer.Serialize(result);
+        return JsonSerializer.Serialize(result, JsonOpts);
     }
 
     private static JsonNode FmtVal(object v)
@@ -948,13 +948,13 @@ public partial class GameMcpServer
             }
             r["metrics_timeline"] = metrics; r["final_values"] = final;
         }
-        if (include == "all" || include == "screenshots") { r["screenshot_count"] = t.Screenshots.Count; r["screenshots"] = JsonSerializer.SerializeToNode(t.Screenshots); }
+        if (include == "all" || include == "screenshots") { r["screenshot_count"] = t.Screenshots.Count; r["screenshots"] = JsonSerializer.SerializeToNode(t.Screenshots, JsonOpts); }
         if (include == "all" || include == "logs")
         {
-            r["logs"] = JsonSerializer.SerializeToNode(t.Logs);
-            r["assert_results"] = new JsonObject { ["passed"] = t.AssertPassed, ["failed"] = t.AssertFailed, ["failures"] = JsonSerializer.SerializeToNode(t.AssertFailures) };
+            r["logs"] = JsonSerializer.SerializeToNode(t.Logs, JsonOpts);
+            r["assert_results"] = new JsonObject { ["passed"] = t.AssertPassed, ["failed"] = t.AssertFailed, ["failures"] = JsonSerializer.SerializeToNode(t.AssertFailures, JsonOpts) };
         }
-        return JsonSerializer.Serialize(r);
+        return JsonSerializer.Serialize(r, JsonOpts);
     }
 
     // ── scene tree / node ops ────────────────────────────────────────────
@@ -1041,7 +1041,7 @@ public partial class GameMcpServer
             ["server_name"] = ServerName,
             ["tools_count"] = _tools.Count,
             ["metrics_count"] = _metrics.Count,
-        });
+        }, JsonOpts);
     }
 
     // ── log tools ───────────────────────────────────────────────────────
@@ -1080,7 +1080,7 @@ public partial class GameMcpServer
         foreach (var e in result)
             arr.Add(new JsonObject { ["level"] = e.Level.ToString().ToUpperInvariant(), ["time"] = Math.Round(e.Timestamp, 3), ["category"] = e.Category, ["message"] = e.Message });
 
-        return JsonSerializer.Serialize(new JsonObject { ["count"] = arr.Count, ["total_in_buffer"] = count, ["entries"] = arr });
+        return JsonSerializer.Serialize(new JsonObject { ["count"] = arr.Count, ["total_in_buffer"] = count, ["entries"] = arr }, JsonOpts);
     }
 
     private string AgentLog(Dictionary<string, JsonElement> args)
@@ -1115,7 +1115,7 @@ public partial class GameMcpServer
 
             var arr = new JsonArray();
             foreach (var l in lines) arr.Add(l);
-            return JsonSerializer.Serialize(new JsonObject { ["count"] = arr.Count, ["entries"] = arr });
+            return JsonSerializer.Serialize(new JsonObject { ["count"] = arr.Count, ["entries"] = arr }, JsonOpts);
         }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
     }
@@ -1135,7 +1135,7 @@ public partial class GameMcpServer
                 int totalLines = g.Sum(f => System.IO.File.ReadAllLines(f).Length);
                 arr.Add(new JsonObject { ["category"] = g.Key, ["files"] = g.Count(), ["entries"] = totalLines, ["size_bytes"] = totalSize });
             }
-            return JsonSerializer.Serialize(new JsonObject { ["categories"] = arr });
+            return JsonSerializer.Serialize(new JsonObject { ["categories"] = arr }, JsonOpts);
         }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
     }

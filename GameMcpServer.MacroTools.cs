@@ -137,7 +137,7 @@ public partial class GameMcpServer
             r["steps"] = steps;
         }
 
-        return JsonSerializer.Serialize(r);
+        return JsonSerializer.Serialize(r, JsonOpts);
     }
 
     private string CancelMacroHandler(Dictionary<string, JsonElement> args)
@@ -173,7 +173,7 @@ public partial class GameMcpServer
             });
         }
 
-        return JsonSerializer.Serialize(new JsonObject { ["macros"] = arr });
+        return JsonSerializer.Serialize(new JsonObject { ["macros"] = arr }, JsonOpts);
     }
 
     // ── Step Parser ───────────────────────────────────────────────────────

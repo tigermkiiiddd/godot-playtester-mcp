@@ -2,8 +2,10 @@ using Godot;
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Unicode;
 using System.Threading;
 
 /// <summary>
@@ -21,6 +23,13 @@ using System.Threading;
 /// </summary>
 public partial class GameMcpServer : Node
 {
+    // Shared JSON options: Chinese/Unicode output as raw UTF-8, not \uXXXX escapes
+    internal static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        Encoder = JavaScriptEncoder.Create(UnicodeRanges.All),
+        WriteIndented = false
+    };
+
     public static GameMcpServer Instance { get; private set; }
 
     [Export] public int Port = 9876;

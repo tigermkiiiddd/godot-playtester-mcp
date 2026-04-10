@@ -110,14 +110,14 @@ public partial class GameMcpServer
             ["protocolVersion"] = "2024-11-05",
             ["capabilities"] = new JsonObject { ["tools"] = new JsonObject { ["listChanged"] = false } },
             ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = "2.0.0" }
-        });
+        }, JsonOpts);
     }
 
     private string HandleToolsList()
     {
         var arr = new JsonArray();
-        foreach (var t in _tools) arr.Add(JsonSerializer.SerializeToNode(t));
-        return JsonSerializer.Serialize(new JsonObject { ["tools"] = arr });
+        foreach (var t in _tools) arr.Add(JsonSerializer.SerializeToNode(t, JsonOpts));
+        return JsonSerializer.Serialize(new JsonObject { ["tools"] = arr }, JsonOpts);
     }
 
     private string HandleToolsCall(JsonObject p)
@@ -134,7 +134,7 @@ public partial class GameMcpServer
         return JsonSerializer.Serialize(new JsonObject
         {
             ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = result?.ToString() ?? "null" } }
-        });
+        }, JsonOpts);
     }
 
     // ── Thread Safety ───────────────────────────────────────────────────
@@ -152,8 +152,8 @@ public partial class GameMcpServer
     // ── JSON-RPC ────────────────────────────────────────────────────────
 
     private static string RpcResult(JsonNode id, string result) =>
-        JsonSerializer.Serialize(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id?.DeepClone(), ["result"] = JsonNode.Parse(result) });
+        JsonSerializer.Serialize(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id?.DeepClone(), ["result"] = JsonNode.Parse(result) }, JsonOpts);
 
     private static string RpcError(JsonNode id, int code, string msg) =>
-        JsonSerializer.Serialize(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id?.DeepClone(), ["error"] = new JsonObject { ["code"] = code, ["message"] = msg } });
+        JsonSerializer.Serialize(new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id?.DeepClone(), ["error"] = new JsonObject { ["code"] = code, ["message"] = msg } }, JsonOpts);
 }
