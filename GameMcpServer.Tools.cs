@@ -46,9 +46,42 @@ public partial class GameMcpServer
             a => GetGameState(a));
 
         Reg("get_ui_layout",
-            "Get all UI Control nodes with layout info (type, name, rect, text, value). Filter by type and visibility.",
+            "Get UI Control nodes as nested tree (like DOM). Each node has type, name, rect, children. Filter by type and visibility.",
             p("{\"visible_only\":{\"type\":\"boolean\"},\"types\":{\"type\":\"string\"}}", "object"),
             a => GetUILayout(a));
+
+        // ── UI Control ───────────────────────────────────────────────────
+
+        Reg("click_element", "Click a UI element by name or path. Uses element's rect center.",
+            p("{\"name\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"button\":{\"type\":\"string\"},\"offset_x\":{\"type\":\"number\"},\"offset_y\":{\"type\":\"number\"}}", "object"),
+            a => ClickElement(a));
+
+        Reg("type_text", "Input text into a UI element (LineEdit/TextEdit). Mode: set=direct, type=simulated keystrokes.",
+            p("{\"target\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"mode\":{\"type\":\"string\"}}", "object", new[] { "target", "text" }),
+            a => TypeText(a));
+
+        Reg("get_focused_element", "Get the currently focused UI Control node.",
+            p("{}", "object"),
+            _ => GetFocusedElement());
+
+        Reg("select_option", "Select an item in OptionButton or ItemList by index.",
+            p("{\"name\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"index\":{\"type\":\"integer\"}}", "object", new[] { "index" }),
+            a => SelectOption(a));
+
+        Reg("hover", "Move mouse to position and emit hover notification.",
+            p("{\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}}", "object"),
+            a => Hover(a["x"].GetSingle(), a["y"].GetSingle()));
+
+        Reg("double_click", "Double-click at screen coordinates.",
+            p("{\"button\":{\"type\":\"string\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}}", "object"),
+            a => DoubleClick(
+                a.ContainsKey("button") ? a["button"].GetString() : "left",
+                a.ContainsKey("x") ? a["x"].GetSingle() : 0f,
+                a.ContainsKey("y") ? a["y"].GetSingle() : 0f));
+
+        Reg("drag", "Drag from one point to another. Press at start, move, release at end.",
+            p("{\"from_x\":{\"type\":\"number\"},\"from_y\":{\"type\":\"number\"},\"to_x\":{\"type\":\"number\"},\"to_y\":{\"type\":\"number\"},\"duration\":{\"type\":\"number\"},\"button\":{\"type\":\"string\"}}", "object"),
+            a => DragMouse(a));
 
         // ── Input ────────────────────────────────────────────────────────
 
@@ -239,7 +272,7 @@ public partial class GameMcpServer
         return GetTree()?.GetFirstNodeInGroup("player");
     }
 
-    // ── get_ui_layout ────────────────────────────────────────────────────
+    // ── get_ui_layout (tree structure like DOM) ─────────────────────────
 
     private string GetUILayout(Dictionary<string, JsonElement> args)
     {
@@ -248,41 +281,289 @@ public partial class GameMcpServer
         if (args.ContainsKey("types") && !string.IsNullOrEmpty(args["types"].GetString()))
             types = args["types"].GetString().Split(',');
 
-        var elements = new JsonArray();
-        CollectUI(GetTree()?.Root, elements, visOnly, types);
-        return JsonSerializer.Serialize(new JsonObject { ["elements"] = elements });
+        var tree = GetTree();
+        if (tree?.Root == null) return "{\"error\":\"No scene tree\"}";
+
+        var roots = new JsonArray();
+        foreach (var child in tree.Root.GetChildren())
+        {
+            if (child == this) continue;
+            var sub = BuildUITreeNode(child, visOnly, types, 0);
+            if (sub != null) roots.Add(sub);
+        }
+        return JsonSerializer.Serialize(new JsonObject { ["roots"] = roots });
     }
 
-    private void CollectUI(Node node, JsonArray elements, bool visOnly, string[] types)
+    private JsonNode BuildUITreeNode(Node node, bool visOnly, string[] types, int depth)
     {
-        if (node == null || node == this) return;
+        if (node == null || node == this) return null;
+
+        if (node is Control c)
+        {
+            if (visOnly && !c.Visible) return null;
+            if (types != null && !types.Any(t => node.GetType().Name.Contains(t.Trim(), StringComparison.OrdinalIgnoreCase))) return null;
+
+            var e = new JsonObject
+            {
+                ["type"] = node.GetType().Name,
+                ["name"] = c.Name.ToString(),
+                ["path"] = c.GetPath().ToString(),
+                ["visible"] = c.Visible,
+                ["depth"] = depth
+            };
+            var r = c.GetGlobalRect();
+            e["rect"] = new JsonArray { Math.Round(r.Position.X, 0), Math.Round(r.Position.Y, 0), Math.Round(r.Size.X, 0), Math.Round(r.Size.Y, 0) };
+
+            // Focus
+            e["focused"] = c.HasFocus();
+
+            // Editable (LineEdit / TextEdit)
+            if (c is LineEdit le) { e["editable"] = le.Editable; e["text"] = le.Text; }
+            else if (c is TextEdit te) { e["editable"] = te.Editable; e["text"] = te.Text; }
+
+            // Mouse filter
+            e["mouse_filter"] = c.MouseFilter.ToString();
+
+            // Disabled
+            if (c is BaseButton bb) e["disabled"] = bb.Disabled;
+
+            // Type-specific fields
+            switch (c)
+            {
+                case CheckBox cb: e["pressed"] = cb.ButtonPressed; e["text"] = cb.Text; break;
+                case OptionButton ob: e["selected"] = ob.Selected; e["item_count"] = ob.ItemCount; e["text"] = ob.Text; break;
+                case Button b: e["text"] = b.Text; break;
+                case Label l: e["text"] = l.Text; break;
+                case ProgressBar pb: e["value"] = Math.Round(pb.Value, 1); e["max_value"] = Math.Round(pb.MaxValue, 1); break;
+                case Slider s: e["value"] = Math.Round(s.Value, 2); e["min_value"] = Math.Round(s.MinValue, 2); e["max_value"] = Math.Round(s.MaxValue, 2); break;
+                case ItemList il: e["item_count"] = il.ItemCount; break;
+                case SpinBox sb: e["value"] = Math.Round(sb.Value, 2); e["min_value"] = Math.Round(sb.MinValue, 2); e["max_value"] = Math.Round(sb.MaxValue, 2); break;
+                case TabBar tb: e["tab_count"] = tb.TabCount; e["current_tab"] = tb.CurrentTab; break;
+            }
+
+            // Recurse into children
+            var childArr = new JsonArray();
+            int childCount = 0;
+            foreach (var ch in c.GetChildren())
+            {
+                var childNode = BuildUITreeNode(ch, visOnly, types, depth + 1);
+                if (childNode != null) { childArr.Add(childNode); childCount++; }
+            }
+            e["children_count"] = childCount;
+            if (childCount > 0) e["children"] = childArr;
+
+            return e;
+        }
+        else
+        {
+            // Non-Control node: recurse looking for Control descendants
+            var childArr = new JsonArray();
+            foreach (var ch in node.GetChildren())
+            {
+                var childNode = BuildUITreeNode(ch, visOnly, types, depth);
+                if (childNode != null) childArr.Add(childNode);
+            }
+            // Merge if only one child (skip non-UI intermediate nodes)
+            if (childArr.Count == 1) return childArr[0];
+            if (childArr.Count > 1) return new JsonObject { ["children"] = childArr };
+            return null;
+        }
+    }
+
+    // ── UI Control Tools ─────────────────────────────────────────────────
+
+    private string ClickElement(Dictionary<string, JsonElement> args)
+    {
+        var control = FindUIElement(args);
+        if (control == null) return "{\"error\":\"Element not found. Provide 'name' or 'path'.\"}";
+
+        var rect = control.GetGlobalRect();
+        float ox = args.ContainsKey("offset_x") ? args["offset_x"].GetSingle() : 0f;
+        float oy = args.ContainsKey("offset_y") ? args["offset_y"].GetSingle() : 0f;
+        float x = (float)Math.Round(rect.Position.X + rect.Size.X / 2 + ox, 0);
+        float y = (float)Math.Round(rect.Position.Y + rect.Size.Y / 2 + oy, 0);
+        string button = args.ContainsKey("button") ? args["button"].GetString() : "left";
+        return ClickMouse(button, "press", x, y);
+    }
+
+    private string TypeText(Dictionary<string, JsonElement> args)
+    {
+        var target = args["target"].GetString();
+        var text = args["text"].GetString();
+        var mode = args.ContainsKey("mode") ? args["mode"].GetString() : "set";
+
+        // Find by name or path
+        var control = FindControlByName(target) ?? FindControlByPath(target);
+        if (control == null) return $"{{\"error\":\"Text target not found: {target}\"}}";
+
+        if (mode == "set")
+        {
+            if (control is LineEdit le) le.Text = text;
+            else if (control is TextEdit te) te.Text = text;
+            else return $"{{\"error\":\"Element {control.Name} is not a text input (type={control.GetType().Name})\"}}";
+            return $"{{\"ok\":true,\"target\":\"{target}\",\"text\":\"{text}\",\"mode\":\"set\"}}";
+        }
+
+        // type mode: simulate keystrokes
+        if (control is LineEdit || control is TextEdit)
+        {
+            control.GrabFocus();
+            foreach (var ch in text)
+            {
+                var kc = MapCharToKey(ch);
+                Input.ParseInputEvent(new InputEventKey { Pressed = true, Keycode = kc, Unicode = (uint)ch });
+                Input.ParseInputEvent(new InputEventKey { Pressed = false, Keycode = kc, Unicode = (uint)ch });
+            }
+            return $"{{\"ok\":true,\"target\":\"{target}\",\"text\":\"{text}\",\"mode\":\"type\"}}";
+        }
+        return $"{{\"error\":\"Element {control.Name} is not a text input\"}}";
+    }
+
+    private string GetFocusedElement()
+    {
+        var tree = GetTree();
+        if (tree?.Root == null) return "{\"error\":\"No scene tree\"}";
+        var focused = FindFocusedControl(tree.Root);
+        if (focused == null) return "{\"focused\":false}";
+        var r = focused.GetGlobalRect();
+        var o = new JsonObject
+        {
+            ["focused"] = true,
+            ["type"] = focused.GetType().Name,
+            ["name"] = focused.Name.ToString(),
+            ["path"] = focused.GetPath().ToString(),
+            ["rect"] = new JsonArray { Math.Round(r.Position.X, 0), Math.Round(r.Position.Y, 0), Math.Round(r.Size.X, 0), Math.Round(r.Size.Y, 0) }
+        };
+        return JsonSerializer.Serialize(o);
+    }
+
+    private string SelectOption(Dictionary<string, JsonElement> args)
+    {
+        int index = args["index"].GetInt32();
+        var control = FindUIElement(args);
+        if (control == null) return "{\"error\":\"Element not found\"}";
+
+        if (control is OptionButton ob)
+        {
+            if (index < 0 || index >= ob.ItemCount) return $"{{\"error\":\"Index {index} out of range (0-{ob.ItemCount - 1})\"}}";
+            ob.Select(index);
+            return $"{{\"ok\":true,\"selected\":{index},\"text\":\"{ob.GetItemText(index)}\"}}";
+        }
+        if (control is ItemList il)
+        {
+            if (index < 0 || index >= il.ItemCount) return $"{{\"error\":\"Index {index} out of range (0-{il.ItemCount - 1})\"}}";
+            il.Select(index);
+            return $"{{\"ok\":true,\"selected\":{index}}}";
+        }
+        return $"{{\"error\":\"Element {control.Name} is not OptionButton/ItemList (type={control.GetType().Name})\"}}";
+    }
+
+    private string Hover(float x, float y)
+    {
+        try
+        {
+            Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) });
+            return $"{{\"ok\":true,\"x\":{x},\"y\":{y}}}";
+        }
+        catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
+    }
+
+    private string DoubleClick(string button, float x, float y)
+    {
+        try
+        {
+            var btn = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left };
+            for (int i = 0; i < 2; i++)
+            {
+                Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btn, DoubleClick = i == 1 });
+                Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btn });
+            }
+            return $"{{\"ok\":true,\"button\":\"{button}\",\"x\":{x},\"y\":{y}}}";
+        }
+        catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
+    }
+
+    private string DragMouse(Dictionary<string, JsonElement> args)
+    {
+        float fromX = args["from_x"].GetSingle();
+        float fromY = args["from_y"].GetSingle();
+        float toX = args["to_x"].GetSingle();
+        float toY = args["to_y"].GetSingle();
+        float duration = args.ContainsKey("duration") ? args["duration"].GetSingle() : 0.3f;
+        string button = args.ContainsKey("button") ? args["button"].GetString() : "left";
+
+        // Use macro system for frame-by-frame drag
+        var id = $"macro_{++_macroCounter:D3}";
+        var steps = new List<MacroStep>
+        {
+            new MacroStep { Type = MacroStepType.Drag, X = fromX, Y = fromY, TargetX = toX, TargetY = toY, Duration = duration, Button = button }
+        };
+        _macros[id] = new MacroRun
+        {
+            Id = id, Name = "drag", Steps = steps, Status = "running",
+            StartTime = Time.GetTicksMsec() / 1000.0
+        };
+        return $"{{\"ok\":true,\"macro_id\":\"{id}\",\"from\":[{fromX},{fromY}],\"to\":[{toX},{toY}],\"duration\":{duration}}}";
+    }
+
+    // ── UI helpers ───────────────────────────────────────────────────────
+
+    private Control FindUIElement(Dictionary<string, JsonElement> args)
+    {
+        if (args.ContainsKey("path") && !string.IsNullOrEmpty(args["path"].GetString()))
+            return FindControlByPath(args["path"].GetString());
+        if (args.ContainsKey("name") && !string.IsNullOrEmpty(args["name"].GetString()))
+            return FindControlByName(args["name"].GetString());
+        return null;
+    }
+
+    private Control FindControlByName(string name)
+    {
+        var tree = GetTree();
+        if (tree?.Root == null) return null;
+        return FindControlByNameRecursive(tree.Root, name);
+    }
+
+    private Control FindControlByNameRecursive(Node node, string name)
+    {
+        if (node is Control c && c.Name.ToString() == name) return c;
         foreach (var child in node.GetChildren())
         {
-            if (child is Control c)
-            {
-                if (visOnly && !c.Visible) continue;
-                if (types != null && !types.Any(t => child.GetType().Name.Contains(t.Trim(), StringComparison.OrdinalIgnoreCase))) continue;
-
-                var e = new JsonObject { ["type"] = child.GetType().Name, ["name"] = c.Name.ToString(), ["visible"] = c.Visible };
-                if (child is BaseButton bb) e["disabled"] = bb.Disabled;
-                var r = c.GetGlobalRect();
-                e["rect"] = new JsonArray { Math.Round(r.Position.X, 0), Math.Round(r.Position.Y, 0), Math.Round(r.Size.X, 0), Math.Round(r.Size.Y, 0) };
-
-                switch (child)
-                {
-                    case CheckBox cb: e["pressed"] = cb.ButtonPressed; e["text"] = cb.Text; break;
-                    case OptionButton ob: e["selected"] = ob.Selected; e["item_count"] = ob.ItemCount; e["text"] = ob.Text; break;
-                    case Button b: e["text"] = b.Text; break;
-                    case Label l: e["text"] = l.Text; break;
-                    case ProgressBar pb: e["value"] = Math.Round(pb.Value, 1); e["max_value"] = Math.Round(pb.MaxValue, 1); break;
-                    case LineEdit le: e["text"] = le.Text; break;
-                    case Slider s: e["value"] = Math.Round(s.Value, 2); e["min_value"] = Math.Round(s.MinValue, 2); e["max_value"] = Math.Round(s.MaxValue, 2); break;
-                    case ItemList il: e["item_count"] = il.ItemCount; break;
-                }
-                elements.Add(e);
-            }
-            CollectUI(child, elements, visOnly, types);
+            var found = FindControlByNameRecursive(child, name);
+            if (found != null) return found;
         }
+        return null;
+    }
+
+    private Control FindControlByPath(string path)
+    {
+        try { return GetNodeOrNull<Control>(path); }
+        catch { return null; }
+    }
+
+    private static Control FindFocusedControl(Node node)
+    {
+        if (node is Control c && c.HasFocus()) return c;
+        foreach (var child in node.GetChildren())
+        {
+            var found = FindFocusedControl(child);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static Key MapCharToKey(char ch)
+    {
+        if (ch >= 'a' && ch <= 'z') return (Key)((int)Key.A + (ch - 'a'));
+        if (ch >= 'A' && ch <= 'Z') return (Key)((int)Key.A + (ch - 'A'));
+        if (ch >= '0' && ch <= '9') return (Key)((int)Key.Key0 + (ch - '0'));
+        return ch switch
+        {
+            ' ' => Key.Space, '\n' => Key.Enter, '\t' => Key.Tab,
+            '.' => Key.Period, ',' => Key.Comma, '-' => Key.Minus,
+            '=' => Key.Equal, '/' => Key.Slash,
+            _ => Key.Unknown
+        };
     }
 
     // ── screenshot ───────────────────────────────────────────────────────
@@ -679,7 +960,7 @@ public partial class GameMcpServer
         int limit = args.ContainsKey("limit") ? args["limit"].GetInt32() : 50;
         try
         {
-            var dir = System.IO.Path.Combine(Godot.ProjectSettings.GlobalizePath("user://"), "mcp_logs");
+            var dir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "debug_logs");
             var files = System.IO.Directory.GetFiles(dir, $"{category}_*.log").OrderBy(f => f).ToList();
             if (files.Count == 0) return $"{{\"count\":0,\"entries\":[]}}";
 
@@ -705,7 +986,7 @@ public partial class GameMcpServer
     {
         try
         {
-            var dir = System.IO.Path.Combine(Godot.ProjectSettings.GlobalizePath("user://"), "mcp_logs");
+            var dir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "debug_logs");
             if (!System.IO.Directory.Exists(dir)) return "{\"categories\":[]}";
             var files = System.IO.Directory.GetFiles(dir, "*.log");
             var groups = files.GroupBy(f => System.IO.Path.GetFileName(f).Split('_')[0]);

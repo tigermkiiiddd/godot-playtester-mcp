@@ -138,10 +138,22 @@ GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `get_game_state` | Structured world state by Groups. Returns positions, distances. **Main feedback channel.** | `groups`, `radius`, `near_x/y`, `limit`, `offset` |
-| `get_ui_layout` | All UI Controls with rect, text, value. **Use to find buttons to click.** | `visible_only`, `types` |
+| `get_ui_layout` | UI Controls as **nested tree** (like DOM). Type, name, rect, text, children, focus, editable. | `visible_only`, `types` |
 | `get_scene_tree` | Full scene tree structure | none |
 | `get_node_properties` | Properties of a specific node | `path` |
 | `get_game_info` | FPS, window size, engine version | none |
+
+### UI Control
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `click_element` | Click UI element by name or path (uses rect center) | `name`, `path`, `button`, `offset_x/y` |
+| `type_text` | Input text into LineEdit/TextEdit (set or type mode) | `target`, `text`, `mode` (set/type) |
+| `select_option` | Select item in OptionButton/ItemList by index | `name`, `path`, `index` |
+| `get_focused_element` | Get currently focused UI Control | none |
+| `drag` | Drag from one point to another (uses macro engine) | `from_x/y`, `to_x/y`, `duration`, `button` |
+| `double_click` | Double-click at screen coordinates | `button`, `x`, `y` |
+| `hover` | Move mouse to position | `x`, `y` |
 
 ### Input Control
 
@@ -194,7 +206,7 @@ GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
 | `cancel_macro` | Cancel running macro, release all held keys | `macro_id` |
 | `list_macros` | List macros, optionally filtered by status | `status` (running/completed/cancelled/error) |
 
-**Step action types**: `hold_key` (press for duration), `tap_key` (instant press+release), `repeat_key` (press N times with interval), `combo_keys` (multiple keys simultaneously), `move_distance` (hold direction until player moves X pixels), `move_to` (walk to target world coordinates), `click` (mouse), `wait` (delay).
+**Step action types**: `hold_key` (press for duration), `tap_key` (instant press+release), `repeat_key` (press N times with interval), `combo_keys` (multiple keys simultaneously), `move_distance` (hold direction until player moves X pixels), `move_to` (walk to target world coordinates, supports 8dir/4dir/free), `click` (mouse), `drag` (press-move-release), `double_click` (fast two clicks), `type_text` (character-by-character input), `wait` (delay).
 
 **move_to modes** (set `mode` parameter):
 - `8dir` (default) — diagonal allowed, WASD, axes finish independently. For 8-directional games.
@@ -223,6 +235,15 @@ GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
 
 // Example: smooth any-angle move (free mode)
 {"steps": [{"action": "move_to", "target_x": 150, "target_y": 80, "mode": "free"}]}
+
+// Example: drag from (100,200) to (400,300) over 0.5s
+{"steps": [{"action": "drag", "from_x": 100, "from_y": 200, "to_x": 400, "to_y": 300, "duration": 0.5}]}
+
+// Example: double-click at position
+{"steps": [{"action": "double_click", "x": 300, "y": 400, "button": "left"}]}
+
+// Example: type text character by character
+{"steps": [{"action": "type_text", "text": "Hello World", "char_interval": 0.05}]}
 ```
 
 ### Node Manipulation

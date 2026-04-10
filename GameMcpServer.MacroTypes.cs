@@ -10,7 +10,10 @@ public enum MacroStepType
     MoveDistance,
     MoveTo,
     Click,
-    Wait
+    Wait,
+    Drag,
+    DoubleClick,
+    TypeText
 }
 
 public class MacroStep
@@ -33,6 +36,13 @@ public class MacroStep
 
     public float X, Y;
     public string Button = "left";
+    public MouseButton ButtonIndex; // runtime: resolved drag button
+
+    // TypeText fields
+    public string Text = "";
+    public double CharInterval = 0.05;
+    public int CharIndex;
+    public double CharTimer;
 
     // Runtime state
     public string Status = "pending";

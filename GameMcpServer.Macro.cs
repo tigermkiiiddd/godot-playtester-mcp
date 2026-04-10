@@ -70,15 +70,54 @@ public partial class GameMcpServer
                 break;
 
             case MacroStepType.Click:
-                var btn = step.Button.ToLower() switch
                 {
-                    "right" => MouseButton.Right,
-                    "middle" => MouseButton.Middle,
-                    _ => MouseButton.Left
-                };
-                Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = btn });
-                Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = btn });
-                step.Status = "completed";
+                    var btn = step.Button.ToLower() switch
+                    {
+                        "right" => MouseButton.Right,
+                        "middle" => MouseButton.Middle,
+                        _ => MouseButton.Left
+                    };
+                    Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = btn });
+                    Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = btn });
+                    step.Status = "completed";
+                    break;
+                }
+
+            case MacroStepType.DoubleClick:
+                {
+                    var dbtn = step.Button.ToLower() switch
+                    {
+                        "right" => MouseButton.Right,
+                        "middle" => MouseButton.Middle,
+                        _ => MouseButton.Left
+                    };
+                    for (int i = 0; i < 2; i++)
+                    {
+                        Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = dbtn, DoubleClick = i == 1 });
+                        Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = dbtn });
+                    }
+                    step.Status = "completed";
+                    break;
+                }
+
+            case MacroStepType.Drag:
+                {
+                    var dragBtn = step.Button.ToLower() switch
+                    {
+                        "right" => MouseButton.Right,
+                        "middle" => MouseButton.Middle,
+                        _ => MouseButton.Left
+                    };
+                    step.ButtonIndex = dragBtn;
+                    Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = dragBtn });
+                    macro.HeldKeys.Add($"__drag_{dragBtn}");
+                    break;
+                }
+
+            case MacroStepType.TypeText:
+                if (string.IsNullOrEmpty(step.Text)) { step.Status = "completed"; break; }
+                step.CharIndex = 0;
+                step.CharTimer = 0;
                 break;
 
             case MacroStepType.Wait:
@@ -191,6 +230,14 @@ public partial class GameMcpServer
 
             case MacroStepType.RepeatKey:
                 ProcessRepeatKey(macro, step, delta);
+                break;
+
+            case MacroStepType.Drag:
+                ProcessDrag(macro, step, delta);
+                break;
+
+            case MacroStepType.TypeText:
+                ProcessTypeText(step, delta);
                 break;
 
             case MacroStepType.MoveDistance:
@@ -367,6 +414,49 @@ public partial class GameMcpServer
             ReleaseStepKeys(macro, step);
             step.Status = "completed";
             step.ErrorMessage = "Distance timeout (10s)";
+        }
+    }
+
+    // ── ProcessDrag ───────────────────────────────────────────────────────
+
+    private void ProcessDrag(MacroRun macro, MacroStep step, double delta)
+    {
+        if (step.Elapsed >= step.Duration)
+        {
+            // Release at target
+            var pos = new Vector2(step.TargetX, step.TargetY);
+            Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = pos, GlobalPosition = pos, ButtonIndex = step.ButtonIndex });
+            macro.HeldKeys.Remove($"__drag_{step.ButtonIndex}");
+            step.Status = "completed";
+            return;
+        }
+
+        // Interpolate position
+        float t = (float)(step.Elapsed / step.Duration);
+        float x = step.X + (step.TargetX - step.X) * t;
+        float y = step.Y + (step.TargetY - step.Y) * t;
+        Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) });
+    }
+
+    // ── ProcessTypeText ──────────────────────────────────────────────────
+
+    private void ProcessTypeText(MacroStep step, double delta)
+    {
+        if (step.CharIndex >= step.Text.Length)
+        {
+            step.Status = "completed";
+            return;
+        }
+
+        step.CharTimer += delta;
+        if (step.CharTimer >= step.CharInterval)
+        {
+            step.CharTimer = 0;
+            char ch = step.Text[step.CharIndex];
+            var kc = MapCharToKey(ch);
+            Input.ParseInputEvent(new InputEventKey { Pressed = true, Keycode = kc, Unicode = (uint)ch });
+            Input.ParseInputEvent(new InputEventKey { Pressed = false, Keycode = kc, Unicode = (uint)ch });
+            step.CharIndex++;
         }
     }
 

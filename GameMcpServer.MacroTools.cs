@@ -10,8 +10,8 @@ public partial class GameMcpServer
     private void RegisterMacroTools()
     {
         Reg("execute_macro",
-            "Execute a sequence of timed input actions (macro). Supports: hold_key (press for duration), tap_key (instant press+release), repeat_key (press N times with interval), combo_keys (multiple keys simultaneously), move_distance (hold direction until player moves X pixels), move_to (walk to target world coordinates, supports diagonal), click (mouse), wait (delay). Returns macro_id immediately; query progress with get_macro_status.",
-            p("{\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"},\"keys\":{\"type\":\"string\"},\"duration\":{\"type\":\"number\"},\"count\":{\"type\":\"integer\"},\"interval\":{\"type\":\"number\"},\"direction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\"},\"target_x\":{\"type\":\"number\"},\"target_y\":{\"type\":\"number\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"button\":{\"type\":\"string\"},\"delay\":{\"type\":\"number\"},\"label\":{\"type\":\"string\"}},\"required\":[\"action\"]}},\"name\":{\"type\":\"string\"}}", "object", new[] { "steps" }),
+            "Execute a sequence of timed input actions (macro). Supports: hold_key, tap_key, repeat_key, combo_keys, move_distance, move_to (8dir/4dir/free), click, drag (press-move-release), double_click, type_text (character-by-character), wait. Returns macro_id immediately; query progress with get_macro_status.",
+            p("{\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"},\"keys\":{\"type\":\"string\"},\"duration\":{\"type\":\"number\"},\"count\":{\"type\":\"integer\"},\"interval\":{\"type\":\"number\"},\"direction\":{\"type\":\"string\"},\"distance\":{\"type\":\"number\"},\"target_x\":{\"type\":\"number\"},\"target_y\":{\"type\":\"number\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"button\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"char_interval\":{\"type\":\"number\"},\"from_x\":{\"type\":\"number\"},\"from_y\":{\"type\":\"number\"},\"to_x\":{\"type\":\"number\"},\"to_y\":{\"type\":\"number\"},\"delay\":{\"type\":\"number\"},\"label\":{\"type\":\"string\"},\"mode\":{\"type\":\"string\"}},\"required\":[\"action\"]}},\"name\":{\"type\":\"string\"}}", "object", new[] { "steps" }),
             ExecuteMacroHandler);
 
         Reg("get_macro_status",
@@ -117,6 +117,18 @@ public partial class GameMcpServer
                 {
                     so["target_x"] = s.TargetX;
                     so["target_y"] = s.TargetY;
+                    so["mode"] = s.Mode;
+                }
+                if (s.Type == MacroStepType.Drag)
+                {
+                    so["from"] = new JsonArray { s.X, s.Y };
+                    so["to"] = new JsonArray { s.TargetX, s.TargetY };
+                }
+                if (s.Type == MacroStepType.TypeText)
+                {
+                    so["text"] = s.Text;
+                    so["char_index"] = s.CharIndex;
+                    so["total_chars"] = s.Text.Length;
                 }
                 if (s.Elapsed > 0) so["elapsed"] = Math.Round(s.Elapsed, 3);
                 if (s.ErrorMessage != null) so["error"] = s.ErrorMessage;
@@ -184,6 +196,9 @@ public partial class GameMcpServer
             "move_to" => MacroStepType.MoveTo,
             "click" => MacroStepType.Click,
             "wait" => MacroStepType.Wait,
+            "drag" => MacroStepType.Drag,
+            "double_click" => MacroStepType.DoubleClick,
+            "type_text" => MacroStepType.TypeText,
             _ => MacroStepType.Wait
         };
 
@@ -218,6 +233,16 @@ public partial class GameMcpServer
         if (el.TryGetProperty("target_x", out var txEl)) step.TargetX = txEl.GetSingle();
         if (el.TryGetProperty("target_y", out var tyEl)) step.TargetY = tyEl.GetSingle();
         if (el.TryGetProperty("mode", out var modeEl)) step.Mode = modeEl.GetString() ?? "8dir";
+
+        // Parse drag: from_x/from_y are X/Y, to_x/to_y are TargetX/TargetY
+        if (el.TryGetProperty("from_x", out var fxEl)) step.X = fxEl.GetSingle();
+        if (el.TryGetProperty("from_y", out var fyEl)) step.Y = fyEl.GetSingle();
+        if (el.TryGetProperty("to_x", out var toxEl)) step.TargetX = toxEl.GetSingle();
+        if (el.TryGetProperty("to_y", out var toyEl)) step.TargetY = toyEl.GetSingle();
+
+        // Parse type_text
+        if (el.TryGetProperty("text", out var textEl)) step.Text = textEl.GetString() ?? "";
+        if (el.TryGetProperty("char_interval", out var ciEl)) step.CharInterval = ciEl.GetDouble();
 
         // Set direction key for move_distance if not provided
         if (step.Type == MacroStepType.MoveDistance && step.Keys.Length == 0 && !string.IsNullOrEmpty(step.Direction))

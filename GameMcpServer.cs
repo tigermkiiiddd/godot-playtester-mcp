@@ -153,12 +153,12 @@ public partial class GameMcpServer : Node
     /// <summary>Log an error.</summary>
     public void LogError(string category, string message) => Log(category, message, LogLevel.Error);
 
-    /// <summary>Log high-volume data to a file (user://mcp_logs/category_date.log).</summary>
+    /// <summary>Log high-volume data to a file (project_dir/debug_logs/category_date.log).</summary>
     public void FileLog(string category, string message)
     {
         try
         {
-            var dir = System.IO.Path.Combine(Godot.ProjectSettings.GlobalizePath("user://"), "mcp_logs");
+            var dir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "debug_logs");
             System.IO.Directory.CreateDirectory(dir);
             var date = DateTime.Now.ToString("yyyyMMdd");
             var path = System.IO.Path.Combine(dir, $"{category}_{date}.log");
