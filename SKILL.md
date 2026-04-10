@@ -114,22 +114,105 @@ public void Refresh()
 
 ### Mouse Polling for Drag-and-Drop
 
-`Input.ParseInputEvent` does NOT route events to CanvasLayer children. For drag-and-drop in CanvasLayer-based UI, game scripts should poll the simulated mouse state:
+`Input.ParseInputEvent` does NOT route events to CanvasLayer children. For drag-and-drop in CanvasLayer-based UI, game scripts need **both** physical mouse support (via `_Input`) and MCP simulated mouse support (via `_Process` polling).
+
+**IMPORTANT**: Use `_Input` (not `_UnhandledInput`) for physical mouse drag. Controls with `MouseFilter.Stop` consume events before `_UnhandledInput` fires. `_Input` fires before GUI processing and always receives the events.
+
+**Physical mouse** goes through `_Input` with `InputEventMouseButton` and `InputEventMouseMotion`. **MCP simulated mouse** is polled from `GameMcpServer.Instance` fields. Both share the same `StartDrag` / `EndDrag` logic.
 
 ```csharp
-var mcp = GameMcpServer.Instance;
-if (mcp == null) return;
+// ── State ──────────────────────────────────────────────────────
+private bool _physMouseDown;
+private bool _dragging;
+private Control _dragPreview;
+private InventoryCell _dragSource;
 
-var mousePos = mcp.SimMousePos;             // Current virtual mouse position
-bool leftDown = mcp.SimMouseLeftDown;        // Is left button held?
-bool justPressed = mcp.SimMouseLeftJustPressed;   // Was left button pressed this frame?
-bool justReleased = mcp.SimMouseLeftJustReleased; // Was left button released this frame?
-
-if (justPressed && !_dragging)
+// ── Keyboard shortcuts (in _UnhandledInput) ────────────────────
+public override void _UnhandledInput(InputEvent ev)
 {
-    var cell = HitTestCell(mousePos);
-    if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
-        StartDrag(cell, mousePos);
+    if (ev is InputEventKey { Pressed: true, Keycode: Key.I })
+        _inventoryPanel.Visible = !_inventoryPanel.Visible;
+}
+
+// ── Physical mouse drag (in _Input, NOT _UnhandledInput!) ──────
+// _Input fires before GUI processing, so it receives events even
+// when child Controls have MouseFilter.Stop
+public override void _Input(InputEvent ev)
+{
+    if (!_inventoryPanel.Visible) return;
+
+    if (ev is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)
+    {
+        if (mb.Pressed && !_dragging)
+        {
+            var cell = HitTestCell(mb.GlobalPosition);
+            if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
+            {
+                StartDrag(cell, mb.GlobalPosition);
+                _physMouseDown = true;
+            }
+        }
+        else if (!mb.Pressed && _physMouseDown && _dragging)
+        {
+            EndDrag(HitTestCell(mb.GlobalPosition));
+            _physMouseDown = false;
+        }
+    }
+
+    if (ev is InputEventMouseMotion mm && _dragging && _physMouseDown)
+    {
+        if (_dragPreview != null)
+            _dragPreview.Position = mm.GlobalPosition;
+    }
+}
+
+// ── MCP simulated mouse drag (polled in _Process) ─────────────
+public override void _Process(double delta)
+{
+    if (_inventoryPanel.Visible)
+        PollSimMouseForDrag();
+}
+
+private void PollSimMouseForDrag()
+{
+    if (_physMouseDown) return; // Physical mouse takes priority
+
+    var mcp = GameMcpServer.Instance;
+    if (mcp == null) return;
+
+    var mousePos = mcp.SimMousePos;
+    bool justPressed = mcp.SimMouseLeftJustPressed;
+    bool justReleased = mcp.SimMouseLeftJustReleased;
+
+    if (justPressed && !_dragging)
+    {
+        var cell = HitTestCell(mousePos);
+        if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
+            StartDrag(cell, mousePos);
+    }
+
+    if (_dragging)
+    {
+        if (_dragPreview != null)
+            _dragPreview.Position = mousePos;
+
+        if (justReleased)
+            EndDrag(HitTestCell(mousePos));
+    }
+}
+
+// ── Hit test: find which inventory cell is under the cursor ────
+private InventoryCell HitTestCell(Vector2 mousePos)
+{
+    for (int row = 0; row < Rows; row++)
+        for (int col = 0; col < Cols; col++)
+        {
+            var cell = _cells[col, row];
+            if (cell == null || !cell.Visible) continue;
+            if (cell.GetGlobalRect().HasPoint(mousePos))
+                return cell;
+        }
+    return null;
 }
 ```
 
@@ -470,11 +553,31 @@ Using `curl` + `bash` to query `http://localhost:9876` has drawbacks:
 
 ### CRITICAL: CanvasLayer Input Routing
 
-`Input.ParseInputEvent` does NOT route events to children of `CanvasLayer`. This means `click_mouse` and simulated clicks on CanvasLayer-based UI will not work through the normal input pipeline.
+`Input.ParseInputEvent` does NOT route events to children of `CanvasLayer`. This means `click_mouse` and simulated clicks on CanvasLayer-based UI will not work through the normal input pipeline. Additionally, Godot's built-in drag-and-drop system (`ForceDrag`, `_GetDragData`, `_CanDropData`, `_DropData`) **completely fails inside CanvasLayer** — `ForceDrag` can start a drag but `_CanDropData`/`_DropData` never fire on drop targets because the hit-testing doesn't cross CanvasLayer transforms.
 
 **Solutions:**
 1. For buttons: `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which bypasses the routing issue.
-2. For drag-and-drop: Game scripts should poll `GameMcpServer.Instance.SimMousePos`, `SimMouseLeftDown`, `SimMouseLeftJustPressed`, `SimMouseLeftJustReleased` in `_Process()`.
+2. For drag-and-drop: Implement **both** physical mouse (`_Input` — NOT `_UnhandledInput`, which gets consumed by `MouseFilter.Stop` controls) and MCP polling (`_Process` → `SimMousePos`). See "Mouse Polling for Drag-and-Drop" section for the complete pattern.
+
+### CRITICAL: Real Mouse / MCP Drag Mutual Exclusion
+
+When implementing dual-source drag (physical mouse + MCP simulated mouse), you **must** use a `_dragFromRealMouse` flag to prevent cross-contamination. Without it:
+
+- MCP starts a drag → `_dragging = true`
+- Next frame: real mouse `PollRealMouseForDrag` sees `_dragging = true` but `Input.IsMouseButtonPressed(Left) = false`
+- This triggers `justReleased = true` and **immediately ends the MCP drag**
+
+**Fix**: Each poll method checks the flag before continuing/ending a drag:
+
+```csharp
+// Real mouse: only handles drags it started
+if (_dragging && !_dragFromRealMouse) return;
+
+// MCP: only handles drags it started
+if (_dragging && _dragFromRealMouse) return;
+```
+
+**Another trap**: Do NOT put `if (_dragging) return;` at the top of a polling method. This prevents the method from updating drag position or detecting release. Only guard the "start new drag" part with `!_dragging`.
 
 ### CRITICAL: JsonNode Parent Ownership Bug
 
