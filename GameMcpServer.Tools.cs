@@ -328,18 +328,36 @@ public partial class GameMcpServer
             if (c is BaseButton bb) e["disabled"] = bb.Disabled;
 
             // Type-specific fields
+            string textContent = null;
             switch (c)
             {
-                case CheckBox cb: e["pressed"] = cb.ButtonPressed; e["text"] = cb.Text; break;
-                case OptionButton ob: e["selected"] = ob.Selected; e["item_count"] = ob.ItemCount; e["text"] = ob.Text; break;
-                case Button b: e["text"] = b.Text; break;
-                case Label l: e["text"] = l.Text; break;
+                case CheckBox cb: e["pressed"] = cb.ButtonPressed; e["text"] = cb.Text; textContent = cb.Text; break;
+                case OptionButton ob: e["selected"] = ob.Selected; e["item_count"] = ob.ItemCount; e["text"] = ob.Text; textContent = ob.Text; break;
+                case Button b: e["text"] = b.Text; textContent = b.Text; break;
+                case Label l: e["text"] = l.Text; textContent = l.Text; break;
                 case ProgressBar pb: e["value"] = Math.Round(pb.Value, 1); e["max_value"] = Math.Round(pb.MaxValue, 1); break;
                 case Slider s: e["value"] = Math.Round(s.Value, 2); e["min_value"] = Math.Round(s.MinValue, 2); e["max_value"] = Math.Round(s.MaxValue, 2); break;
                 case ItemList il: e["item_count"] = il.ItemCount; break;
                 case SpinBox sb: e["value"] = Math.Round(sb.Value, 2); e["min_value"] = Math.Round(sb.MinValue, 2); e["max_value"] = Math.Round(sb.MaxValue, 2); break;
                 case TabBar tb: e["tab_count"] = tb.TabCount; e["current_tab"] = tb.CurrentTab; break;
             }
+
+            // Font size + text rendered size (for controls with text)
+            try
+            {
+                var fontSize = c.GetThemeFontSize("font_size");
+                if (fontSize > 0)
+                {
+                    e["font_size"] = fontSize;
+                    if (!string.IsNullOrEmpty(textContent))
+                    {
+                        var font = c.GetThemeFont("font");
+                        var textSize = font.GetStringSize(textContent, HorizontalAlignment.Left, -1, fontSize);
+                        e["text_size"] = new JsonArray { Math.Round(textSize.X, 0), Math.Round(textSize.Y, 0) };
+                    }
+                }
+            }
+            catch { }
 
             // Custom control domain data via SetMeta("mcp_data", jsonString)
             if (c.HasMeta("mcp_data"))
