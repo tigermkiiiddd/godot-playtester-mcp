@@ -305,7 +305,7 @@ GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
 
 ## Agent Usage Guide
 
-**IMPORTANT: Always use MCP tools directly, never use `curl` + `bash` to access the server.** The MCP adapter handles JSON parsing, Chinese text, and protocol details automatically. Using raw curl produces garbled Chinese on Windows terminals and requires manual JSON parsing.
+**IMPORTANT: Prefer MCP tools directly over `curl` + `bash`.** The MCP adapter handles JSON parsing, Chinese text, and protocol details automatically. Raw curl on Windows terminals produces garbled Chinese and requires manual JSON parsing. Use curl only when MCP adapter is unavailable.
 
 When testing a game, follow this priority:
 
@@ -459,14 +459,14 @@ curl -s ... -d '{"...get_metrics...latest"}'
 
 ## Pitfalls & Gotchas
 
-### Don't Use curl to Access MCP Server
+### Prefer MCP Protocol Over curl
 
-Using `curl` + `bash` to query `http://localhost:9876` causes:
+Using `curl` + `bash` to query `http://localhost:9876` has drawbacks:
 1. Chinese text garbled (Windows terminal GBK vs UTF-8 conflict)
 2. Requires manual JSON parsing (python regex on raw JSON)
 3. `\u0022` escape sequences for quotes in double-encoded MCP responses
 
-**Always use MCP tools directly** through the configured MCP adapter. The adapter handles all JSON parsing and encoding automatically.
+**Prefer MCP tools directly** through the configured MCP adapter. The adapter handles all JSON parsing and encoding automatically. Use curl only when the MCP adapter is unavailable (e.g. debugging the server itself).
 
 ### CRITICAL: CanvasLayer Input Routing
 
