@@ -20,7 +20,7 @@ using System.Threading;
 ///   - Name UI Control nodes so MCP can extract layout info
 ///   - Register metrics for numeric monitoring
 /// </summary>
-public partial class GameMcpServer : Node
+public partial class GameMcpServer : Node, IInputProvider
 {
     // Shared JSON options: Chinese/Unicode output as raw UTF-8, readable escapes
     internal static readonly JsonSerializerOptions JsonOpts = new()
@@ -44,7 +44,8 @@ public partial class GameMcpServer : Node
 
     // Metrics
     internal readonly Dictionary<string, MetricEntry> _metrics = new();
-    internal readonly Dictionary<string, List<MetricSample>> _metricHistory = new();
+    internal readonly Dictionary<string, RingBuffer<MetricSample>> _metricHistory = new();
+    private const int MAX_HISTORY_SAMPLES = 6000;
     private const int MAX_HISTORY_SECONDS = 60;
     private const int MAX_TEST_HISTORY_SECONDS = 600;
 
@@ -77,12 +78,20 @@ public partial class GameMcpServer : Node
     private bool _simMouseLeftDown;   // simulated left button state
     private bool _simMouseRightDown;  // simulated right button state
     private bool _prevMouseLeftDown;  // previous frame state (for edge detection)
+    private bool _simMouseLeftJustPressed;  // cached per-frame edge
+    private bool _simMouseLeftJustReleased; // cached per-frame edge
 
-    // Public accessors for game scripts to poll simulated mouse
+    // IInputProvider — explicit interface implementation
+    Vector2 IInputProvider.MousePosition => _simMousePos;
+    bool IInputProvider.MouseLeftDown => _simMouseLeftDown;
+    bool IInputProvider.MouseLeftJustPressed => _simMouseLeftJustPressed;
+    bool IInputProvider.MouseLeftJustReleased => _simMouseLeftJustReleased;
+
+    // Legacy public accessors (kept for backward compat)
     public Vector2 SimMousePos => _simMousePos;
     public bool SimMouseLeftDown => _simMouseLeftDown;
-    public bool SimMouseLeftJustPressed => _simMouseLeftDown && !_prevMouseLeftDown;
-    public bool SimMouseLeftJustReleased => !_simMouseLeftDown && _prevMouseLeftDown;
+    public bool SimMouseLeftJustPressed => _simMouseLeftJustPressed;
+    public bool SimMouseLeftJustReleased => _simMouseLeftJustReleased;
 
     // Thread-safe action queue (HTTP thread → main thread)
     private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _mainQueue = new();
@@ -108,14 +117,19 @@ public partial class GameMcpServer : Node
 
     public override void _Process(double delta)
     {
+        // Snapshot edge detection at start of frame, before any updates
+        _simMouseLeftJustPressed = _simMouseLeftDown && !_prevMouseLeftDown;
+        _simMouseLeftJustReleased = !_simMouseLeftDown && _prevMouseLeftDown;
+
         while (_mainQueue.TryDequeue(out var action))
             action();
-        _prevMouseLeftDown = _simMouseLeftDown; // track edge before processing
         SampleMetrics(delta);
         UpdateTests(delta);
         UpdateMacros(delta);
         UpdateHealthHud();
         UpdateVirtualCursor();
+        // Update previous state at END of frame for next frame's edge detection
+        _prevMouseLeftDown = _simMouseLeftDown;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -147,7 +161,7 @@ public partial class GameMcpServer : Node
     public void RegisterMetric(string name, Func<object> getter, double sampleRate = 1.0)
     {
         _metrics[name] = new MetricEntry { Getter = getter, SampleRate = sampleRate };
-        _metricHistory[name] = new List<MetricSample>();
+        _metricHistory[name] = new RingBuffer<MetricSample>(MAX_HISTORY_SAMPLES);
         GD.Print($"[GameMcp] Registered metric: {name}");
     }
 

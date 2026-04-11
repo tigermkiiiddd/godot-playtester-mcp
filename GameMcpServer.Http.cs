@@ -31,6 +31,9 @@ public partial class GameMcpServer
         _running = false;
         try { _listener?.Stop(); } catch { }
         _listener = null;
+        foreach (var writer in _fileWriters.Values)
+            try { writer.Dispose(); } catch { }
+        _fileWriters.Clear();
     }
 
     private void ServerLoop()
@@ -66,7 +69,7 @@ public partial class GameMcpServer
         string requestBody;
         using (var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding))
             requestBody = await reader.ReadToEndAsync();
-        _requestCount++;
+        Interlocked.Increment(ref _requestCount);
 
         string responseBody;
         try { responseBody = ProcessMcpMessage(requestBody); }
@@ -116,7 +119,16 @@ public partial class GameMcpServer
     private string HandleToolsList()
     {
         var arr = new JsonArray();
-        foreach (var t in _tools) arr.Add(JsonSerializer.SerializeToNode(t, JsonOpts));
+        foreach (var t in _tools)
+        {
+            // MCP spec requires lowercase: name, description, inputSchema
+            arr.Add(new JsonObject
+            {
+                ["name"] = t.Name,
+                ["description"] = t.Description,
+                ["inputSchema"] = JsonSerializer.SerializeToNode(t.InputSchema, JsonOpts),
+            });
+        }
         return JsonSerializer.Serialize(new JsonObject { ["tools"] = arr }, JsonOpts);
     }
 

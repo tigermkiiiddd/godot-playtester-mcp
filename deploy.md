@@ -9,19 +9,27 @@ Step-by-step guide for embedding the Playtester MCP server into any Godot 4 (.NE
 
 ## Step 1: Copy the Plugin
 
-The server is split into 6 partial class files. Copy all of them into your project:
+The server is split into partial class files. Copy all of them into your project:
 
 ```bash
-cp ${CLAUDE_SKILL_DIR}/GameMcpServer*.cs <project>/addons/game_mcp/
+cp ${CLAUDE_SKILL_DIR}/GameMcpServer*.cs ${CLAUDE_SKILL_DIR}/RingBuffer.cs <project>/addons/game_mcp/
 ```
 
 Files:
 - `GameMcpServer.cs` — Core: Node lifecycle, _Process, public API, thread queue
 - `GameMcpServer.Http.cs` — HTTP server, MCP protocol, JSON-RPC
-- `GameMcpServer.Tools.cs` — Built-in tool implementations (17 tools)
+- `GameMcpServer.Helpers.cs` — Shared helper utilities
+- `GameMcpServer.Result.cs` — JSON response builders
+- `GameMcpServer.Tools.cs` — Tool registration dispatcher
+- `GameMcpServer.Tools.Scene.cs` — Scene tree & node manipulation tools
+- `GameMcpServer.Tools.Query.cs` — Game state & UI query tools
+- `GameMcpServer.Tools.UI.cs` — UI interaction tools
+- `GameMcpServer.Tools.Input.cs` — Input simulation tools
+- `GameMcpServer.Tools.Diagnostics.cs` — Metrics, testing, logging tools
 - `GameMcpServer.MacroTypes.cs` — Macro data types (MacroStepType, MacroStep, MacroRun)
 - `GameMcpServer.Macro.cs` — Macro execution engine
 - `GameMcpServer.MacroTools.cs` — Macro MCP tools (execute_macro, get_macro_status, cancel_macro, list_macros)
+- `RingBuffer.cs` — Generic ring buffer utility
 
 ## Step 2: Configure as Autoload
 

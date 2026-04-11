@@ -8,6 +8,8 @@ public partial class GameMcpServer
 
     private void UpdateMacros(double delta)
     {
+        if (_macros.Count == 0) return;
+
         // Prune completed macros older than 5 minutes
         var cutoff = Time.GetTicksMsec() / 1000.0 - 300;
         var toRemove = _macros.Where(kv =>
@@ -102,18 +104,27 @@ public partial class GameMcpServer
 
             case MacroStepType.Drag:
                 {
-                    var dragBtn = step.Button.ToLower() switch
+                    bool hasButton = !string.IsNullOrEmpty(step.Button) && step.Button.ToLowerInvariant() != "none";
+                    if (hasButton)
                     {
-                        "right" => MouseButton.Right,
-                        "middle" => MouseButton.Middle,
-                        _ => MouseButton.Left
-                    };
-                    step.ButtonIndex = dragBtn;
-                    _simMousePos = new Vector2(step.X, step.Y);
-                    Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = dragBtn });
-                    if (dragBtn == MouseButton.Left) _simMouseLeftDown = true;
-                    else if (dragBtn == MouseButton.Right) _simMouseRightDown = true;
-                    macro.HeldKeys.Add($"__drag_{dragBtn}");
+                        var dragBtn = step.Button.ToLower() switch
+                        {
+                            "right" => MouseButton.Right,
+                            "middle" => MouseButton.Middle,
+                            _ => MouseButton.Left
+                        };
+                        step.ButtonIndex = dragBtn;
+                        _simMousePos = new Vector2(step.X, step.Y);
+                        Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = dragBtn });
+                        if (dragBtn == MouseButton.Left) _simMouseLeftDown = true;
+                        else if (dragBtn == MouseButton.Right) _simMouseRightDown = true;
+                        macro.HeldKeys.Add($"__drag_{dragBtn}");
+                    }
+                    else
+                    {
+                        step.ButtonIndex = MouseButton.None;
+                        _simMousePos = new Vector2(step.X, step.Y);
+                    }
                     break;
                 }
 
@@ -429,10 +440,14 @@ public partial class GameMcpServer
             // Release at target
             var pos = new Vector2(step.TargetX, step.TargetY);
             _simMousePos = pos;
-            Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = pos, GlobalPosition = pos, ButtonIndex = step.ButtonIndex });
-            if (step.ButtonIndex == MouseButton.Left) _simMouseLeftDown = false;
-            else if (step.ButtonIndex == MouseButton.Right) _simMouseRightDown = false;
-            macro.HeldKeys.Remove($"__drag_{step.ButtonIndex}");
+            bool hasButton = step.ButtonIndex != MouseButton.None;
+            if (hasButton)
+            {
+                Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = pos, GlobalPosition = pos, ButtonIndex = step.ButtonIndex });
+                if (step.ButtonIndex == MouseButton.Left) _simMouseLeftDown = false;
+                else if (step.ButtonIndex == MouseButton.Right) _simMouseRightDown = false;
+                macro.HeldKeys.Remove($"__drag_{step.ButtonIndex}");
+            }
             step.Status = "completed";
             return;
         }

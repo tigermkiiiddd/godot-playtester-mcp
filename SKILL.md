@@ -3,6 +3,7 @@ name: godot-playtester-mcp
 description: |
   Deploy a playtester MCP server into a running Godot game so AI agents can inspect, control, and test it.
   Use when the user wants to add MCP to a Godot game, let AI test/play their game, do balance testing, or remote-control a running Godot game.
+  IMPORTANT: Always use MCP tools directly. NEVER use curl + python to query the MCP server — the MCP adapter handles all JSON/encoding automatically.
 ---
 
 # Godot Playtester MCP
@@ -20,7 +21,7 @@ Embeds an MCP server into a Godot 4 (.NET) game. AI agents can query game state,
 
 Read `${CLAUDE_SKILL_DIR}/deploy.md` for the full deployment guide. Summary:
 
-1. Copy all `GameMcpServer*.cs` files (6 partial classes) into the project
+1. Copy all `GameMcpServer*.cs` + `RingBuffer.cs` files (14 partial class files) into the project
 2. Add as Autoload in Project Settings
 3. Tag game objects with Godot Groups (see Protocol below)
 4. Run the game — MCP server starts on `http://localhost:9876`
@@ -60,6 +61,8 @@ Tag all game objects with standard groups. The MCP server queries these groups a
 | `interactables` | Doors, chests, switches | Recommended |
 | `projectiles` | Bullets, spells | Optional |
 | `triggers` | Trigger zones | Optional |
+| `mcp_ui` | UI node that should appear in `get_ui_layout` whitelist | For non-standard controls |
+| `mcp_ignore` | Never appear in `get_ui_layout` (hard exclusion) | For noisy nodes |
 
 ```csharp
 // In your game scripts:
@@ -72,7 +75,38 @@ public override void _Ready()
 
 ### UI Naming Convention
 
+**Node names MUST be ASCII-only (English).** All Control nodes that need MCP interaction (clicking, typing, dragging) must use English names. Chinese/Unicode node names break `click_element`, `call_node_method`, and `get_node_properties` when requests pass through Windows terminals (GBK encoding corrupts non-ASCII characters). Display text (`Text` property) can still be Chinese — only the `Name` property must be ASCII.
+
+```csharp
+// WRONG — Chinese node name, click_element will fail
+var healBtn = new Button { Name = "治疗按钮", Text = "治疗" };
+
+// CORRECT — English node name, Chinese display text
+var healBtn = new Button { Name = "HealBtn", Text = "治疗" };
+```
+
 Name all UI Control nodes descriptively. MCP extracts type, text, value, and rect automatically.
+
+### get_ui_layout Whitelist Rules
+
+`get_ui_layout` uses a **whitelist** approach by default (`tagged_only=true`):
+
+**Always included (whitelist):**
+- Nodes with `mcp_data` metadata (game code registered domain data)
+- Nodes in `mcp_ui` group (game code explicitly tagged)
+- Interactive control types: `Button`, `Label`, `LineEdit`, `TextEdit`, `CheckBox`, `OptionButton`, `ProgressBar`, `Slider`, `SpinBox`, `TabBar`, `ItemList`, `TextureRect`, `RichTextLabel`
+
+**Always excluded:**
+- Nodes in `mcp_ignore` group (hard exclusion, even with `tagged_only=false`)
+- Everything else (ColorRect, plain Control, etc.)
+
+**Parameters:**
+- `tagged_only=true` (default): whitelist mode, only show useful nodes
+- `tagged_only=false`: show everything (except `mcp_ignore`)
+- `path="/root/root/HUDLayer/HUD"`: only inspect subtree at given path (local view)
+- `max_depth=8`: limit recursion depth
+- `visible_only=true` (default): skip invisible nodes
+- `types="Button,Label"`: filter by control type names
 
 ```csharp
 // MCP will extract: type=Button, text=Attack, rect=[10,500,80,30]
@@ -109,8 +143,10 @@ public void Refresh()
 
 `get_ui_layout` will return this cell with:
 ```json
-{"type": "InventoryCell", "name": "格_0_0", "rect": [...], "data": {"item_name": "铁剑", "item_icon": "iron_sword", ...}}
+{"type": "InventoryCell", "name": "Cell_0_0", "rect": [...], "data": {"item_name": "铁剑", "item_icon": "iron_sword", ...}}
 ```
+
+Note: Node `Name` is ASCII (`Cell_0_0`), but `mcp_data` values can be any language (`铁剑`).
 
 ### Mouse Polling for Drag-and-Drop
 
@@ -248,20 +284,80 @@ private void RegisterMcpMetrics()
 
 ### Log Registration Convention
 
-Three-tier logging for AI debugging:
+Three-tier logging for AI debugging. **Every `GD.Print()` for important events MUST be paired with a corresponding MCP log call.**
 
 ```csharp
 // AI Log — important events (ring buffer, MCP queryable)
+// This is the PRIMARY log tier. Use for anything the AI agent needs to verify.
 GameMcpServer.Instance?.Log("scene", "Loading scene: BattleArena");
 GameMcpServer.Instance?.LogWarn("player", "HP below 20%");
 GameMcpServer.Instance?.LogError("system", "Save file corrupted");
 
 // File Log — high-volume data (disk, MCP queryable)
+// Use for combat damage, economy transactions, etc.
 GameMcpServer.Instance?.FileLog("combat", $"enemy={enemyId} damage={dmg} hp={hp}");
 GameMcpServer.Instance?.FileLog("economy", $"spent={amount} on={item}");
 
 // Debug Log — replaces GD.Print for MCP visibility
+// Use for development debug output
 GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
+```
+
+**Best practice — pair every GD.Print with MCP Log:**
+
+```csharp
+// UI button callbacks — ALWAYS log
+invBtn.Pressed += () => {
+    _inventoryPanel.Visible = !_inventoryPanel.Visible;
+    GameMcpServer.Instance?.Log("ui", _inventoryPanel.Visible ? "背包打开" : "背包关闭");
+};
+
+// Drag events — ALWAYS log start and end
+private void StartDrag(InventoryCell source, Vector2 pos) {
+    _dragging = true;
+    GameMcpServer.Instance?.Log("inventory", $"拖拽开始: {source.Data.ItemName} ({source.Col},{source.Row})");
+}
+
+private void EndDrag(InventoryCell target) {
+    GameMcpServer.Instance?.Log("inventory", $"拖拽完成: {_dragSource.Data.ItemName} → {(target?.Data.ItemName ?? "空格")}");
+}
+
+// Toast/message — ALWAYS log so agent can verify
+private void ShowToast(string msg) {
+    _toastLabel.Text = msg;
+    _toastLabel.Visible = true;
+    GameMcpServer.Instance?.Log("ui", msg);
+}
+```
+
+### CRITICAL: Log Closed-Loop Rule
+
+Every significant game action **must** write to at least one MCP log tier (AI Log preferred). This ensures the AI agent can verify its operations by reading logs — not just trusting `ok: true` returns.
+
+**Rule**: `GD.Print()` alone is NOT sufficient. It only goes to Godot console (invisible to AI). Add `GameMcpServer.Instance?.Log()` alongside every `GD.Print()` for important events.
+
+```csharp
+// WRONG — only Godot console, AI can't verify
+GD.Print("[背包] 打开");
+
+// CORRECT — both Godot console AND MCP AI Log
+GD.Print("[背包] 打开");
+GameMcpServer.Instance?.Log("ui", "背包打开");
+```
+
+**Minimum events that MUST log:**
+- UI open/close (panels, dialogs, menus)
+- Button clicks that trigger game actions (heal, buy, craft)
+- Drag-and-drop start/complete
+- Scene transitions
+- Player state changes (HP change, level up, death)
+- Error/failure conditions
+
+**Verification pattern** (agent-side):
+```
+1. Agent sends command (click_element, execute_macro, etc.)
+2. Agent reads get_logs() to verify game logged the action
+3. If log entry missing → operation may not have reached game code
 ```
 
 ## Built-in Tools
@@ -271,7 +367,7 @@ GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `get_game_state` | Structured world state by Groups. Returns positions, distances. **Main feedback channel.** | `groups`, `radius`, `near_x/y`, `limit`, `offset` |
-| `get_ui_layout` | UI Controls as **nested tree** (like DOM). Type, name, rect, text, children, focus, editable. | `visible_only`, `types` |
+| `get_ui_layout` | UI Controls as **nested tree** (like DOM). Type, name, rect, text, children, focus, editable. **Whitelist mode** by default: only shows tagged/interactive nodes. Grid compression: `detail=compact` (default, core fields only) or `detail=full` (all mcp_data fields). | `visible_only`, `types`, `tagged_only` (default true), `path` (subtree root), `max_depth` (default 8), `detail` (compact/full) |
 | `get_scene_tree` | Full scene tree structure | none |
 | `get_node_properties` | Properties of a specific node | `path` |
 | `get_game_info` | FPS, window size, engine version | none |
@@ -388,7 +484,7 @@ GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
 
 ## Agent Usage Guide
 
-**IMPORTANT: Prefer MCP tools directly over `curl` + `bash`.** The MCP adapter handles JSON parsing, Chinese text, and protocol details automatically. Raw curl on Windows terminals produces garbled Chinese and requires manual JSON parsing. Use curl only when MCP adapter is unavailable.
+**IMPORTANT: NEVER use `curl` + `python` to query the MCP server.** Always use MCP tools directly through the configured MCP adapter. The adapter handles JSON parsing, Chinese text, and protocol details automatically. Raw curl on Windows terminals produces garbled Chinese and requires manual JSON parsing.
 
 When testing a game, follow this priority:
 
@@ -542,138 +638,22 @@ curl -s ... -d '{"...get_metrics...latest"}'
 
 ## Pitfalls & Gotchas
 
-### Prefer MCP Protocol Over curl
+See **debugging.md** for full diagnosis table and detailed fixes.
 
-Using `curl` + `bash` to query `http://localhost:9876` has drawbacks:
-1. Chinese text garbled (Windows terminal GBK vs UTF-8 conflict)
-2. Requires manual JSON parsing (python regex on raw JSON)
-3. `\u0022` escape sequences for quotes in double-encoded MCP responses
+**Most common issues:**
+- MCP tools not appearing → `HandleToolsList()` must use lowercase keys (`name`, `description`, `inputSchema`)
+- Chinese node names fail → Use ASCII-only `Name` property, any-language `Text`
+- `JsonNode parent` error → Use `id?.DeepClone()` in RpcResult
+- Drag cancels immediately → Add `_dragFromRealMouse` flag for mutual exclusion
+- `tap_key` not working → Use `hold_key` with duration instead
+- Stale DLL → `dotnet build --no-incremental`
+- Multiple Godot processes → `tasklist | grep Godot` and kill old one
 
-**Prefer MCP tools directly** through the configured MCP adapter. The adapter handles all JSON parsing and encoding automatically. Use curl only when the MCP adapter is unavailable (e.g. debugging the server itself).
+## Playtest Template
 
-### CRITICAL: CanvasLayer Input Routing
+See **testing.md** for the full three-phase playtest process (Prep → Execute → Report).
 
-`Input.ParseInputEvent` does NOT route events to children of `CanvasLayer`. This means `click_mouse` and simulated clicks on CanvasLayer-based UI will not work through the normal input pipeline. Additionally, Godot's built-in drag-and-drop system (`ForceDrag`, `_GetDragData`, `_CanDropData`, `_DropData`) **completely fails inside CanvasLayer** — `ForceDrag` can start a drag but `_CanDropData`/`_DropData` never fire on drop targets because the hit-testing doesn't cross CanvasLayer transforms.
-
-**Solutions:**
-1. For buttons: `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which bypasses the routing issue.
-2. For drag-and-drop: Implement **both** physical mouse (`_Input` — NOT `_UnhandledInput`, which gets consumed by `MouseFilter.Stop` controls) and MCP polling (`_Process` → `SimMousePos`). See "Mouse Polling for Drag-and-Drop" section for the complete pattern.
-
-### CRITICAL: Real Mouse / MCP Drag Mutual Exclusion
-
-When implementing dual-source drag (physical mouse + MCP simulated mouse), you **must** use a `_dragFromRealMouse` flag to prevent cross-contamination. Without it:
-
-- MCP starts a drag → `_dragging = true`
-- Next frame: real mouse `PollRealMouseForDrag` sees `_dragging = true` but `Input.IsMouseButtonPressed(Left) = false`
-- This triggers `justReleased = true` and **immediately ends the MCP drag**
-
-**Fix**: Each poll method checks the flag before continuing/ending a drag:
-
-```csharp
-// Real mouse: only handles drags it started
-if (_dragging && !_dragFromRealMouse) return;
-
-// MCP: only handles drags it started
-if (_dragging && _dragFromRealMouse) return;
-```
-
-**Another trap**: Do NOT put `if (_dragging) return;` at the top of a polling method. This prevents the method from updating drag position or detecting release. Only guard the "start new drag" part with `!_dragging`.
-
-### CRITICAL: JsonNode Parent Ownership Bug
-
-**Symptom**: Every MCP request returns `InvalidOperationException: "The node already has a parent."`
-
-**Root cause**: `System.Text.Json.Nodes.JsonNode` cannot be inserted into two different parent objects. In `RpcResult` / `RpcError`, the `id` parsed from the request JSON already belongs to the request's `JsonObject`. Reusing it in a new `JsonObject` triggers the exception.
-
-```csharp
-// WRONG — id already has a parent (the parsed request JSON)
-new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ... }
-
-// CORRECT — DeepClone before inserting
-new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id?.DeepClone(), ... }
-```
-
-This error is **extremely misleading** — it looks like a Godot scene tree error but is actually a `System.Text.Json` error. The stack trace reveals `System.Text.Json.Nodes.JsonNode.AssignParent`.
-
-### Don't Re-register Metrics Every Frame
-
-**Wrong**: Calling `RegisterMetric()` inside `_PhysicsProcess()` or `_Process()`. This creates duplicate metric entries and wastes memory every frame.
-
-**Correct**: Register once in `_Ready()` via `CallDeferred()`:
-```csharp
-public override void _Ready()
-{
-    CallDeferred(MethodName.RegisterMcpMetrics);
-}
-```
-
-### Line2D Trail Must Use ToLocal()
-
-When a `Line2D` is a child of a moving `CharacterBody2D`, adding points as raw `GlobalPosition` will produce incorrect visual results because points are in local space relative to the parent.
-
-```csharp
-// WRONG — points drift as player moves
-trail.AddPoint(pt);
-
-// CORRECT — convert world position to local
-trail.AddPoint(ToLocal(pt));
-```
-
-### Thread Safety: ConcurrentQueue, Not CallDeferred
-
-The MCP HTTP server runs on a background thread. All Godot API calls must be marshaled to the main thread. Use `ConcurrentQueue<Action>` drained in `_Process()`, not `Callable.From().CallDeferred()` (which can deadlock when combined with `ManualResetEventSlim`).
-
-```csharp
-// HTTP thread: enqueue action
-_mainQueue.Enqueue(() => { result = handler(args); done.Set(); });
-
-// Main thread: drain in _Process
-while (_mainQueue.TryDequeue(out var action))
-    action();
-```
-
-### Godot 4.6 C# API Changes
-
-Several APIs changed from older Godot 4.x versions:
-
-| Old (broken) | New (Godot 4.6) |
-|---|---|
-| `Camera2D.UnprojectPosition()` | `camera.GetScreenTransform() * pos` |
-| `Node.Visible` | `node is CanvasItem ci && ci.Visible` |
-| `Control.Disabled` | Only on `BaseButton`, not all `Control` |
-| `Input.AccumulateInput()` | Removed — `ParseInputEvent()` is sufficient |
-| `Node.Set(prop, val)` | `node.Set(new StringName(prop), Variant.From(val))` |
-| `CallDeferred(MethodGroup)` | `CallDeferred(MethodName.Method)` |
-| `img.SaveJpgToBuffer(buf)` | `img.SaveJpgToBuffer()` (returns byte[]) |
-
-### CheckBox/OptionButton Switch Ordering
-
-`CheckBox` and `OptionButton` inherit from `Button`. In a `switch` statement, they must be checked BEFORE `Button`, or the `Button` case will catch them.
-
-```csharp
-switch (child)
-{
-    case CheckBox cb: ... break;   // Specific types FIRST
-    case OptionButton ob: ... break;
-    case Button b: ... break;      // Base type LAST
-    case Label l: ... break;
-}
-```
-
-### Scene Files: Always Use Godot MCP to Create
-
-Never hand-write `.tscn` files. The format requires proper UIDs and resource references that are easy to get wrong. Use the Godot MCP (`create_scene`, `add_node`) to create scenes programmatically.
-
-### CRITICAL: JsonElement Extraction for Array Parameters
-
-**Symptom**: `InvalidOperationException: "The node must be of type 'JsonValue'"` when calling tools with array parameters (like `execute_macro` with `steps`).
-
-**Root cause**: `JsonNode.GetValue<JsonElement>()` only works on `JsonValue` leaf nodes. It throws on `JsonArray` or `JsonObject` nodes.
-
-```csharp
-// WRONG — fails for array/object parameters
-args[kv.Key] = kv.Value.GetValue<JsonElement>();
-
-// CORRECT — serialize and deserialize to get a clean JsonElement
-args[kv.Key] = JsonSerializer.Deserialize<JsonElement>(kv.Value.ToJsonString());
-```
+**Key rules:**
+1. Write test cases BEFORE operating (`log` intent)
+2. Test one thing at a time, verify with `get_logs()` after each
+3. Every test must have log evidence (closed-loop)

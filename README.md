@@ -4,7 +4,7 @@ Embed an MCP (Model Context Protocol) server into a running Godot 4 (.NET) game.
 
 ## Zero-Intrusion Design
 
-Copy 6 files into `addons/game_mcp/`, register as Autoload, done. No architecture changes, no new dependencies, no base classes to inherit. Game code runs exactly as before — MCP is just a passive observer.
+Copy 14 files into `addons/game_mcp/`, register as Autoload, done. No architecture changes, no new dependencies, no base classes to inherit. Game code runs exactly as before — MCP is just a passive observer.
 
 **Minimal game code changes:**
 - Tag game objects with Groups: `AddToGroup("player")` — one line per object
@@ -13,7 +13,7 @@ Copy 6 files into `addons/game_mcp/`, register as Autoload, done. No architectur
 
 ## How It Works
 
-1. Copy all `GameMcpServer*.cs` files (6 partial classes) into your project
+1. Copy all `GameMcpServer*.cs` + `RingBuffer.cs` files (14 partial class files) into your project
 2. Register `GameMcpServer` as Autoload in Project Settings
 3. Tag game objects with Godot Groups (`player`, `enemies`, `items`, etc.)
 4. Run the game — MCP server starts on `http://localhost:9876`
@@ -66,10 +66,18 @@ Supports: `hold_key`, `tap_key`, `repeat_key`, `combo_keys`, `move_distance`, `m
 |------|---------|
 | `GameMcpServer.cs` | Core: Node lifecycle, public API, JSON options |
 | `GameMcpServer.Http.cs` | HTTP server, MCP JSON-RPC protocol |
-| `GameMcpServer.Tools.cs` | 34 built-in tool implementations |
+| `GameMcpServer.Helpers.cs` | Shared helper utilities |
+| `GameMcpServer.Result.cs` | JSON response builders |
+| `GameMcpServer.Tools.cs` | Tool registration dispatcher |
+| `GameMcpServer.Tools.Scene.cs` | Scene tree & node manipulation tools |
+| `GameMcpServer.Tools.Query.cs` | Game state & UI query tools |
+| `GameMcpServer.Tools.UI.cs` | UI interaction tools |
+| `GameMcpServer.Tools.Input.cs` | Input simulation tools |
+| `GameMcpServer.Tools.Diagnostics.cs` | Metrics, testing, logging tools |
 | `GameMcpServer.MacroTypes.cs` | Macro step data types |
 | `GameMcpServer.Macro.cs` | Macro execution engine (runs in _Process) |
 | `GameMcpServer.MacroTools.cs` | Macro MCP tools (execute/cancel/list) |
+| `RingBuffer.cs` | Generic ring buffer utility |
 | `SKILL.md` | Full documentation with conventions and pitfalls |
 | `deploy.md` | Step-by-step deployment guide |
 
