@@ -5,7 +5,7 @@ description: |
   Use when the user wants to: test a Godot game, playtest gameplay, run automated game tests, balance test,
   simulate player input, capture game screenshots, monitor game metrics, verify game behavior,
   remote-control a running Godot game, or do closed-loop game testing.
-  Includes a three-phase testing workflow: Prep (write test cases) → Execute (one test at a time with log verification) → Report (evidence-based summary).
+  Includes a three-phase testing workflow with MANDATORY boundary/edge case testing: Prep (write test cases including cancel/backward/state-recovery scenarios) → Execute (happy path + boundary cases, one at a time with log verification) → Report (evidence-based summary).
   IMPORTANT: Always use MCP tools directly. NEVER use curl + python to query the MCP server — the MCP adapter handles all JSON/encoding automatically.
 ---
 
@@ -98,6 +98,25 @@ var healBtn = new Button { Name = "HealBtn", Text = "治疗" };
 ```
 
 Name all UI Control nodes descriptively. MCP extracts type, text, value, and rect automatically.
+
+### Button Callback Convention (Disabled Guard)
+
+`click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which **bypasses the `Disabled` property**. A disabled button still fires when clicked via MCP.
+
+**Development paradigm**: MCP operates at the signal level, it does not replicate UI state checks. Game code must be defensive — every button callback MUST guard its own preconditions:
+
+```csharp
+// WRONG — assumes signal only fires when button is interactive
+healBtn.Pressed += () => DoHeal();
+
+// CORRECT — callback validates its own preconditions
+healBtn.Pressed += () => {
+    if (healBtn.Disabled) return;
+    DoHeal();
+};
+```
+
+This is a coding convention for MCP-compatible games. The principle: **signal firing ≠ user intent. Game code owns its state guards.**
 
 ### get_ui_layout Whitelist Rules
 
@@ -517,9 +536,18 @@ See **docs/debugging.md** for full diagnosis table and detailed fixes.
 See **docs/testing.md** for the full three-phase playtest process (Prep → Execute → Report).
 
 **Key rules:**
-1. Write test cases BEFORE operating (`log` intent)
-2. Test one thing at a time, verify with `get_logs()` after each
-3. Every test must have log evidence (closed-loop)
+1. Write test cases BEFORE operating (`log` intent) — **IRON LAW, no exceptions**
+2. Every test case MUST include boundary/edge cases (cancel, backward nav, state recovery) — not optional
+3. Test one thing at a time, verify with `get_logs()` after each
+4. Every test must have log evidence (closed-loop)
+5. After boundary tests, verify game is NOT frozen: `get_game_state()` + `get_ui_layout()`
+
+**Boundary test categories to check for every feature:**
+- Cancel/abort mid-operation (cancel zone selection, close dialog midway)
+- Backward navigation (go back to previous step in multi-step flow)
+- State recovery (after interruption, is UI/game still usable?)
+- Repeated actions (open/close rapidly, click twice)
+- Out-of-order (skip steps, wrong sequence)
 
 ## Documentation Index
 
@@ -528,6 +556,7 @@ See **docs/testing.md** for the full three-phase playtest process (Prep → Exec
 | `docs/deploy.md` | Step-by-step installation and configuration |
 | `docs/integration.md` | Game code conventions, drag-and-drop patterns, CanvasLayer handling |
 | `docs/testing.md` | Three-phase playtest process (Prep → Execute → Report) |
+| `docs/test-case-template.md` | Copy-pasteable test case templates with naming conventions (Template A/B/C) |
 | `docs/debugging.md` | Common pitfalls, root causes, and fixes |
 | `docs/requirements.md` | Dependencies and recommended tools |
 | `docs/quick-start.md` | Minimal working example (WASD player with trail) |
