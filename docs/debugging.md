@@ -14,8 +14,33 @@ Common pitfalls, root causes, and fixes when working with the Godot Playtester M
 | `JsonElement` extraction error on array params | `GetValue<JsonElement>()` fails on non-leaf nodes | Use `JsonSerializer.Deserialize<JsonElement>(...)` |
 | Old game code running on port | Two Godot processes, old one occupies port | `taskkill` old process, verify single process |
 | DLL not updating | Incremental build doesn't detect changes | `dotnet build --no-incremental` |
+| Disabled button still clickable via MCP | `click_element` uses `EmitSignal` which bypasses `Disabled` | Check `Disabled` in callback or check `get_ui_layout` before clicking |
 
 ## Critical Issues (Detailed)
+
+### click_element Bypasses Button Disabled State
+
+**Symptom**: AI clicks a disabled button and it fires the callback, causing unintended game behavior (e.g. entering a photo mode panel that should be locked).
+
+**Root cause**: `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` to trigger buttons. This directly emits the `pressed` signal, completely bypassing the `Disabled` property check. A button with `Disabled = true` still fires when clicked via MCP.
+
+**Impact**: The AI agent doesn't know a button is supposed to be disabled. `get_ui_layout` reports the button exists and is visible, so the agent reasonably clicks it — but the game logic expects that button to be blocked.
+
+**Workaround (game-side)**: Check `Disabled` state inside the button callback:
+```csharp
+healBtn.Pressed += () => {
+    if (healBtn.Disabled) return;  // guard against MCP bypass
+    DoHeal();
+};
+```
+
+**Workaround (agent-side)**: Check `disabled` field in `get_ui_layout` output before clicking:
+```
+1. get_ui_layout() → find button, check if "disabled": true
+2. If disabled → skip click, do NOT force it
+```
+
+**Note**: This is a design tradeoff. `EmitSignal` is necessary to bypass CanvasLayer input routing issues (buttons inside CanvasLayer don't receive `Input.ParseInputEvent`). The bypass of `Disabled` is a side effect.
 
 ### MCP Tools Not Appearing (tools/list Field Names)
 
