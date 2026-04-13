@@ -2,6 +2,73 @@
 
 Three-phase playtest process: **Prep → Execute → Report**. Every test must have log evidence (closed-loop verification).
 
+## Concurrency Rule
+
+MCP tool calls are split into two categories with different concurrency rules:
+
+### Read-type tools — CAN be called concurrently
+
+These only read game state, never mutate it. Safe to call multiple in parallel:
+
+| Tool | What it reads |
+|------|---------------|
+| `get_game_info` | FPS, window size, engine version |
+| `get_game_state` | World objects, positions, distances |
+| `get_ui_layout` | UI tree structure |
+| `get_scene_tree` | Full scene hierarchy |
+| `get_node_properties` | Node property values |
+| `get_metrics` | Registered metric values |
+| `get_logs` | AI log ring buffer |
+| `get_debug_logs` | Debug log ring buffer |
+| `get_file_logs` | File log entries |
+| `get_file_log_summary` | File log statistics |
+| `screenshot` | Current frame capture |
+| `get_focused_element` | Focused UI control |
+| `get_macro_status` | Macro execution progress |
+| `list_macros` | Macro list |
+| `get_test_results` | Background test results |
+
+**Usage:** Batch multiple reads in a single tool call block to reduce round-trips:
+```
+// All three fire in parallel — one round-trip instead of three
+get_game_info()
+get_metrics()
+get_ui_layout()
+```
+
+### Control-type tools — MUST be called sequentially, NEVER concurrently
+
+These mutate game state, simulate input, or trigger side effects. Calling concurrently causes race conditions, dropped inputs, or undefined behavior:
+
+| Tool | What it controls |
+|------|-----------------|
+| `click_element` | Click UI button/element |
+| `click_mouse` | Mouse button at coordinates |
+| `press_key` | Keyboard key press/release |
+| `move_mouse` | Move cursor position |
+| `scroll_mouse` | Mouse wheel |
+| `simulate_input` | Mapped input action |
+| `type_text` | Text input into control |
+| `select_option` | Select dropdown/list item |
+| `execute_macro` | Start scripted input sequence |
+| `cancel_macro` | Cancel running macro |
+| `drag` | Drag from A to B |
+| `double_click` | Double-click at position |
+| `hover` | Move mouse + hover notification |
+| `set_node_property` | Modify node property |
+| `call_node_method` | Invoke node method |
+| `log` | Write AI log entry |
+| `clear_logs` | Clear log buffers |
+| `register_metric` | Register new metric |
+| `start_test` | Start background test |
+
+**Rule:** After each control action, wait for the game to process it before sending the next. The safe pattern is:
+```
+1. control action (click, press, etc.)
+2. one or more reads to verify (can be concurrent reads)
+3. next control action
+```
+
 ## Phase 1: Prep — Write Test Cases
 
 Before touching any MCP tool, write test cases as `log` entries and create a task list:

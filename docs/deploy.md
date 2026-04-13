@@ -12,7 +12,7 @@ Step-by-step guide for embedding the Playtester MCP server into any Godot 4 (.NE
 The server is split into partial class files. Copy all of them into your project:
 
 ```bash
-cp ${CLAUDE_SKILL_DIR}/GameMcpServer*.cs ${CLAUDE_SKILL_DIR}/RingBuffer.cs <project>/addons/game_mcp/
+cp ${CLAUDE_SKILL_DIR}/src/GameMcpServer*.cs ${CLAUDE_SKILL_DIR}/src/RingBuffer.cs <project>/addons/game_mcp/
 ```
 
 Files:

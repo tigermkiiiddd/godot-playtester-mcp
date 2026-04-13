@@ -4,7 +4,7 @@ How to integrate the MCP playtester into a Godot 4 (.NET) game. Game code conven
 
 ## Step 1: Copy Files
 
-Copy all `GameMcpServer*.cs` + `RingBuffer.cs` + `IInputProvider.cs` files into your project (e.g., `addons/game_mcp/`). Copy `mcp-http-bridge.mjs` as the MCP stdio bridge.
+Copy all `GameMcpServer*.cs` + `RingBuffer.cs` + `IInputProvider.cs` files from `src/` into your project (e.g., `addons/game_mcp/`). Copy `mcp-http-bridge.mjs` as the MCP stdio bridge.
 
 ## Step 2: Add Autoload
 
