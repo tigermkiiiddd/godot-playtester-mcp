@@ -53,15 +53,17 @@ new Button { Name = "治疗按钮", Text = "治疗" };     // ✗ click_element 
 `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which **bypasses the `Disabled` property**. Every button callback MUST guard:
 
 ```csharp
-// WRONG — disabled button still fires via MCP
+// WRONG — assumes signal only fires when button is interactive
 healBtn.Pressed += () => DoHeal();
 
-// CORRECT — guard Disabled state
+// CORRECT — callback validates its own preconditions
 healBtn.Pressed += () => {
     if (healBtn.Disabled) return;
     DoHeal();
 };
 ```
+
+**Principle**: MCP operates at the signal level and does not replicate UI state checks. Game code owns its state guards — signal firing ≠ user intent.
 
 ### UI Data (mcp_data)
 
