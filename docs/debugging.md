@@ -24,23 +24,21 @@ Common pitfalls, root causes, and fixes when working with the Godot Playtester M
 
 **Root cause**: `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` to trigger buttons. This directly emits the `pressed` signal, completely bypassing the `Disabled` property check. A button with `Disabled = true` still fires when clicked via MCP.
 
-**Impact**: The AI agent doesn't know a button is supposed to be disabled. `get_ui_layout` reports the button exists and is visible, so the agent reasonably clicks it — but the game logic expects that button to be blocked.
+**This is a design tradeoff, not a bug.** `EmitSignal` is necessary to bypass CanvasLayer input routing issues (buttons inside CanvasLayer don't receive `Input.ParseInputEvent`). The bypass of `Disabled` is a known side effect.
 
-**Workaround (game-side)**: Check `Disabled` state inside the button callback:
+**Development convention**: All button callbacks in MCP-compatible games MUST guard `Disabled`:
 ```csharp
 healBtn.Pressed += () => {
-    if (healBtn.Disabled) return;  // guard against MCP bypass
+    if (healBtn.Disabled) return;
     DoHeal();
 };
 ```
 
-**Workaround (agent-side)**: Check `disabled` field in `get_ui_layout` output before clicking:
+**Agent-side**: Check `disabled` field in `get_ui_layout` output before clicking:
 ```
 1. get_ui_layout() → find button, check if "disabled": true
 2. If disabled → skip click, do NOT force it
 ```
-
-**Note**: This is a design tradeoff. `EmitSignal` is necessary to bypass CanvasLayer input routing issues (buttons inside CanvasLayer don't receive `Input.ParseInputEvent`). The bypass of `Disabled` is a side effect.
 
 ### MCP Tools Not Appearing (tools/list Field Names)
 

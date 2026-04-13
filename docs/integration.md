@@ -48,6 +48,21 @@ new Button { Name = "HealBtn", Text = "治疗" };     // ✓
 new Button { Name = "治疗按钮", Text = "治疗" };     // ✗ click_element fails
 ```
 
+### Button Callback Convention (Disabled Guard)
+
+`click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which **bypasses the `Disabled` property**. Every button callback MUST guard:
+
+```csharp
+// WRONG — disabled button still fires via MCP
+healBtn.Pressed += () => DoHeal();
+
+// CORRECT — guard Disabled state
+healBtn.Pressed += () => {
+    if (healBtn.Disabled) return;
+    DoHeal();
+};
+```
+
 ### UI Data (mcp_data)
 
 Expose domain data via `SetMeta("mcp_data", jsonString)`:
