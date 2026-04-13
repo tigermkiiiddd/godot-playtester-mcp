@@ -505,6 +505,7 @@ See **docs/debugging.md** for full diagnosis table and detailed fixes.
 **Most common issues:**
 - MCP tools not appearing → `HandleToolsList()` must use lowercase keys (`name`, `description`, `inputSchema`)
 - Chinese node names fail → Use ASCII-only `Name` property, any-language `Text`
+- **Disabled button still fires via `click_element`** → `EmitSignal` bypasses `Disabled` state. Check `get_ui_layout` for `disabled: true` before clicking
 - `JsonNode parent` error → Use `id?.DeepClone()` in RpcResult
 - Drag cancels immediately → Add `_dragFromRealMouse` flag for mutual exclusion
 - `tap_key` not working → Use `hold_key` with duration instead
