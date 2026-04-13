@@ -117,12 +117,174 @@ private void RegisterMcpMetrics()
 
 ## Step 7: Handle CanvasLayer Drag-and-Drop
 
-If your UI is inside a `CanvasLayer`, Godot's built-in drag-and-drop doesn't work. Implement dual-source polling:
+`Input.ParseInputEvent` does NOT route events to CanvasLayer children. For drag-and-drop in CanvasLayer-based UI, game scripts need **both** physical mouse support (via `_Input`) and MCP simulated mouse support (via `_Process` polling).
 
-1. **Physical mouse** — poll in `_Process` via `Input.IsMouseButtonPressed()` and `_hudRoot.GetGlobalMousePosition()`
-2. **MCP simulated mouse** — poll in `_Process` via `GameMcpServer.Instance.SimMousePos` and edge detection
+**IMPORTANT**: Use `_Input` (not `_UnhandledInput`) for physical mouse drag. Controls with `MouseFilter.Stop` consume events before `_UnhandledInput` fires. `_Input` fires before GUI processing and always receives the events.
 
-Use a `_dragFromRealMouse` flag to prevent cross-contamination between the two sources. See SKILL.md "Mouse Polling for Drag-and-Drop" for the complete code pattern.
+**Physical mouse** goes through `_Input` with `InputEventMouseButton` and `InputEventMouseMotion`. **MCP simulated mouse** is polled from `GameMcpServer.Instance` fields. Both share the same `StartDrag` / `EndDrag` logic.
+
+```csharp
+// ── State ──────────────────────────────────────────────────────
+private bool _physMouseDown;
+private bool _dragging;
+private Control _dragPreview;
+private InventoryCell _dragSource;
+
+// ── Keyboard shortcuts (in _UnhandledInput) ────────────────────
+public override void _UnhandledInput(InputEvent ev)
+{
+    if (ev is InputEventKey { Pressed: true, Keycode: Key.I })
+        _inventoryPanel.Visible = !_inventoryPanel.Visible;
+}
+
+// ── Physical mouse drag (in _Input, NOT _UnhandledInput!) ──────
+// _Input fires before GUI processing, so it receives events even
+// when child Controls have MouseFilter.Stop
+public override void _Input(InputEvent ev)
+{
+    if (!_inventoryPanel.Visible) return;
+
+    if (ev is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)
+    {
+        if (mb.Pressed && !_dragging)
+        {
+            var cell = HitTestCell(mb.GlobalPosition);
+            if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
+            {
+                StartDrag(cell, mb.GlobalPosition);
+                _physMouseDown = true;
+            }
+        }
+        else if (!mb.Pressed && _physMouseDown && _dragging)
+        {
+            EndDrag(HitTestCell(mb.GlobalPosition));
+            _physMouseDown = false;
+        }
+    }
+
+    if (ev is InputEventMouseMotion mm && _dragging && _physMouseDown)
+    {
+        if (_dragPreview != null)
+            _dragPreview.Position = mm.GlobalPosition;
+    }
+}
+
+// ── MCP simulated mouse drag (polled in _Process) ─────────────
+public override void _Process(double delta)
+{
+    if (_inventoryPanel.Visible)
+        PollSimMouseForDrag();
+}
+
+private void PollSimMouseForDrag()
+{
+    if (_physMouseDown) return; // Physical mouse takes priority
+
+    var mcp = GameMcpServer.Instance;
+    if (mcp == null) return;
+
+    var mousePos = mcp.SimMousePos;
+    bool justPressed = mcp.SimMouseLeftJustPressed;
+    bool justReleased = mcp.SimMouseLeftJustReleased;
+
+    if (justPressed && !_dragging)
+    {
+        var cell = HitTestCell(mousePos);
+        if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
+            StartDrag(cell, mousePos);
+    }
+
+    if (_dragging)
+    {
+        if (_dragPreview != null)
+            _dragPreview.Position = mousePos;
+
+        if (justReleased)
+            EndDrag(HitTestCell(mousePos));
+    }
+}
+
+// ── Hit test: find which inventory cell is under the cursor ────
+private InventoryCell HitTestCell(Vector2 mousePos)
+{
+    for (int row = 0; row < Rows; row++)
+        for (int col = 0; col < Cols; col++)
+        {
+            var cell = _cells[col, row];
+            if (cell == null || !cell.Visible) continue;
+            if (cell.GetGlobalRect().HasPoint(mousePos))
+                return cell;
+        }
+    return null;
+}
+```
+
+For buttons, `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which bypasses the CanvasLayer routing issue.
+
+## Step 8: Map/Area Selection via Dual-Channel Polling
+
+**Scenario**: Isometric map with drag-to-select tile regions. The drag happens on a Node2D (IsoScene), not a CanvasLayer Control, but the HUD that reads the drag state lives inside a CanvasLayer. Neither `_Input` nor `Input.IsMouseButtonPressed` reflects MCP simulated mouse state.
+
+**Solution**: Merge both channels into a single `_Process` polling method with coordinate conversion:
+
+```csharp
+// ── Zone drag: dual-channel polling in _Process ──────────────
+private void HandleZoneInput()
+{
+    if (_isoScene == null) return;
+
+    // Dual-channel: physical mouse + MCP simulated mouse
+    bool physDown = Input.IsMouseButtonPressed(MouseButton.Left);
+    var mcp = GameMcpServer.Instance;
+    bool mcpDown = mcp != null && mcp.SimMouseLeftDown;
+    bool mouseDown = physDown || mcpDown;
+
+    if (mouseDown)
+    {
+        Vector2 worldPos;
+        if (!physDown && mcpDown)
+        {
+            // MCP mode: SimMousePos is screen coords, convert to world
+            var vpSize = GetViewport().GetVisibleRect().Size;
+            var cam = _isoScene.GetParent()?.GetNodeOrNull<Camera2D>("Camera2D");
+            var camPos = cam != null ? cam.Position : Vector2.Zero;
+            worldPos = mcp.SimMousePos - vpSize / 2f + camPos;
+        }
+        else
+        {
+            // Physical mouse: use standard conversion
+            worldPos = _isoScene.ToLocal(_isoScene.GetGlobalMousePosition());
+        }
+        var tile = IsoScene.WorldToTile(worldPos);
+        if (!IsInstanceValid(_isoScene)) return;
+        if (!_isoScene.IsInBounds(tile.X, tile.Y)) return;
+
+        if (!_dragging) { _dragging = true; _dragStartTile = tile; _dragEndTile = tile; }
+        else { _dragEndTile = tile; }
+    }
+    else if (_dragging)
+    {
+        FinalizeDragRectangle();
+        _dragging = false;
+    }
+}
+```
+
+**Key points**:
+- `Input.IsMouseButtonPressed()` only reflects physical hardware — always check `mcp.SimMouseLeftDown` too
+- `SimMousePos` is screen coordinates — must convert via camera offset to get world coordinates
+- Physical mouse uses `GetGlobalMousePosition()` / `ToLocal()`, MCP uses manual screen→world math
+- Use `execute_macro` with `drag` action for MCP zone selection (not separate press/move/release calls which process too fast)
+
+**MCP test pattern** for selecting specific tiles — use single-point drags to accumulate individual tiles:
+```json
+{"steps": [
+  {"action": "drag", "from_x": 516, "from_y": 268, "to_x": 516, "to_y": 268, "duration": 0.3, "button": "left"},
+  {"action": "wait", "delay": 0.2},
+  {"action": "drag", "from_x": 546, "from_y": 282, "to_x": 546, "to_y": 282, "duration": 0.3, "button": "left"},
+  {"action": "wait", "delay": 0.2}
+]}
+```
 
 ## Build & Run
 

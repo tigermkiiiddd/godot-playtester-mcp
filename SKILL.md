@@ -1,12 +1,15 @@
 ---
-name: godot-playtester-mcp
+name: godot-play-tester
 description: |
-  Deploy a playtester MCP server into a running Godot game so AI agents can inspect, control, and test it.
-  Use when the user wants to add MCP to a Godot game, let AI test/play their game, do balance testing, or remote-control a running Godot game.
+  Deploy a runtime MCP server into a running Godot 4 (.NET) game for AI-driven playtesting and automated QA.
+  Use when the user wants to: test a Godot game, playtest gameplay, run automated game tests, balance test,
+  simulate player input, capture game screenshots, monitor game metrics, verify game behavior,
+  remote-control a running Godot game, or do closed-loop game testing.
+  Includes a three-phase testing workflow: Prep (write test cases) → Execute (one test at a time with log verification) → Report (evidence-based summary).
   IMPORTANT: Always use MCP tools directly. NEVER use curl + python to query the MCP server — the MCP adapter handles all JSON/encoding automatically.
 ---
 
-# Godot Playtester MCP
+# Godot Play Tester
 
 Embeds an MCP server into a Godot 4 (.NET) game. AI agents can query game state, simulate input, capture screenshots, monitor metrics, and run automated tests.
 
@@ -17,11 +20,20 @@ Embeds an MCP server into a Godot 4 (.NET) game. AI agents can query game state,
 - User wants to remote-control a running Godot game from Claude Code
 - User wants to do balance testing or automated QA
 
+## Requirements
+
+### Required
+- Godot 4.6+ with .NET/C# support
+- `mcp-http-bridge.mjs` bridge script (in addon directory)
+
+### Recommended
+- [godot-mcp](https://github.com/Coding-Solo/godot-mcp) (`@coding-solo/godot-mcp`) — Editor-side MCP for creating scenes, adding nodes, running the project, reading debug output. Pairs with this runtime MCP for full edit→build→run→test workflow.
+
 ## Quick Start
 
-Read `${CLAUDE_SKILL_DIR}/deploy.md` for the full deployment guide. Summary:
+Read `${CLAUDE_SKILL_DIR}/docs/deploy.md` for the full deployment guide. Summary:
 
-1. Copy all `GameMcpServer*.cs` + `RingBuffer.cs` files (14 partial class files) into the project
+1. Copy all files from `src/` (14 partial class files) into the project
 2. Add as Autoload in Project Settings
 3. Tag game objects with Godot Groups (see Protocol below)
 4. Run the game — MCP server starts on `http://localhost:9876`
@@ -148,111 +160,11 @@ public void Refresh()
 
 Note: Node `Name` is ASCII (`Cell_0_0`), but `mcp_data` values can be any language (`铁剑`).
 
-### Mouse Polling for Drag-and-Drop
+### Drag-and-Drop & Map Selection
 
-`Input.ParseInputEvent` does NOT route events to CanvasLayer children. For drag-and-drop in CanvasLayer-based UI, game scripts need **both** physical mouse support (via `_Input`) and MCP simulated mouse support (via `_Process` polling).
+CanvasLayer drag-and-drop and isometric map tile selection require **dual-channel polling** (physical mouse + MCP simulated mouse). The complete implementation patterns are in `docs/integration.md` Steps 7–8.
 
-**IMPORTANT**: Use `_Input` (not `_UnhandledInput`) for physical mouse drag. Controls with `MouseFilter.Stop` consume events before `_UnhandledInput` fires. `_Input` fires before GUI processing and always receives the events.
-
-**Physical mouse** goes through `_Input` with `InputEventMouseButton` and `InputEventMouseMotion`. **MCP simulated mouse** is polled from `GameMcpServer.Instance` fields. Both share the same `StartDrag` / `EndDrag` logic.
-
-```csharp
-// ── State ──────────────────────────────────────────────────────
-private bool _physMouseDown;
-private bool _dragging;
-private Control _dragPreview;
-private InventoryCell _dragSource;
-
-// ── Keyboard shortcuts (in _UnhandledInput) ────────────────────
-public override void _UnhandledInput(InputEvent ev)
-{
-    if (ev is InputEventKey { Pressed: true, Keycode: Key.I })
-        _inventoryPanel.Visible = !_inventoryPanel.Visible;
-}
-
-// ── Physical mouse drag (in _Input, NOT _UnhandledInput!) ──────
-// _Input fires before GUI processing, so it receives events even
-// when child Controls have MouseFilter.Stop
-public override void _Input(InputEvent ev)
-{
-    if (!_inventoryPanel.Visible) return;
-
-    if (ev is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)
-    {
-        if (mb.Pressed && !_dragging)
-        {
-            var cell = HitTestCell(mb.GlobalPosition);
-            if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
-            {
-                StartDrag(cell, mb.GlobalPosition);
-                _physMouseDown = true;
-            }
-        }
-        else if (!mb.Pressed && _physMouseDown && _dragging)
-        {
-            EndDrag(HitTestCell(mb.GlobalPosition));
-            _physMouseDown = false;
-        }
-    }
-
-    if (ev is InputEventMouseMotion mm && _dragging && _physMouseDown)
-    {
-        if (_dragPreview != null)
-            _dragPreview.Position = mm.GlobalPosition;
-    }
-}
-
-// ── MCP simulated mouse drag (polled in _Process) ─────────────
-public override void _Process(double delta)
-{
-    if (_inventoryPanel.Visible)
-        PollSimMouseForDrag();
-}
-
-private void PollSimMouseForDrag()
-{
-    if (_physMouseDown) return; // Physical mouse takes priority
-
-    var mcp = GameMcpServer.Instance;
-    if (mcp == null) return;
-
-    var mousePos = mcp.SimMousePos;
-    bool justPressed = mcp.SimMouseLeftJustPressed;
-    bool justReleased = mcp.SimMouseLeftJustReleased;
-
-    if (justPressed && !_dragging)
-    {
-        var cell = HitTestCell(mousePos);
-        if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
-            StartDrag(cell, mousePos);
-    }
-
-    if (_dragging)
-    {
-        if (_dragPreview != null)
-            _dragPreview.Position = mousePos;
-
-        if (justReleased)
-            EndDrag(HitTestCell(mousePos));
-    }
-}
-
-// ── Hit test: find which inventory cell is under the cursor ────
-private InventoryCell HitTestCell(Vector2 mousePos)
-{
-    for (int row = 0; row < Rows; row++)
-        for (int col = 0; col < Cols; col++)
-        {
-            var cell = _cells[col, row];
-            if (cell == null || !cell.Visible) continue;
-            if (cell.GetGlobalRect().HasPoint(mousePos))
-                return cell;
-        }
-    return null;
-}
-```
-
-For buttons, `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which bypasses the CanvasLayer routing issue.
+**Key rule**: `Input.IsMouseButtonPressed()` only reflects physical hardware. Always check `GameMcpServer.Instance.SimMouseLeftDown` too. Use `_Input` (not `_UnhandledInput`) for physical mouse drag.
 
 ### Metric Registration Convention
 
@@ -482,6 +394,21 @@ GameMcpServer.Instance?.Log("ui", "背包打开");
 | `set_node_property` | Set a property on a node | `path`, `property`, `value` |
 | `call_node_method` | Call a method on a node | `path`, `method`, `args` |
 
+## MANDATORY: Game Launch Sequence
+
+**Before ANY playtester MCP tool call, the game MUST be running.** Follow this exact sequence:
+
+1. **`dotnet build`** — compile C# changes (godot-mcp `run_project` does NOT trigger C# compilation)
+2. **godot-mcp `run_project`** — launch the game from the editor
+3. **Playtester `get_game_info`** — confirm game is running (check `uptime` > 0 and `session_id` is fresh)
+
+**NEVER launch the game via bash/command line.** Godot MCP manages the process lifecycle and provides debug output via `get_debug_output`.
+
+If code changes are needed mid-test:
+```
+godot-mcp stop_project → edit code → dotnet build → godot-mcp run_project → get_game_info (verify fresh session)
+```
+
 ## Agent Usage Guide
 
 **IMPORTANT: NEVER use `curl` + `python` to query the MCP server.** Always use MCP tools directly through the configured MCP adapter. The adapter handles JSON parsing, Chinese text, and protocol details automatically. Raw curl on Windows terminals produces garbled Chinese and requires manual JSON parsing.
@@ -526,119 +453,54 @@ When testing a game, follow this priority:
 4. get_game_state() → verify enemy dead or player position changed
 ```
 
+## Recommended: Pair with Godot MCP
+
+For the best development workflow, use alongside [godot-mcp](https://github.com/Coding-Solo/godot-mcp) (`@coding-solo/godot-mcp`). The two MCP servers complement each other:
+
+| | Godot MCP (Editor) | Playtester MCP (Runtime) |
+|---|---|---|
+| **Works when** | Editor is open | Game is running |
+| **Does** | Create scenes, add nodes, run project, read debug output | Query game state, simulate input, capture screenshots, metrics |
+| **Scope** | Project structure & assets | Live game simulation |
+
+**Typical workflow:**
+1. Godot MCP: create scene, add nodes, attach scripts
+2. `dotnet build` (Godot MCP `run_project` does NOT trigger C# compilation)
+3. Godot MCP: `run_project` to launch game
+4. Playtester MCP: `get_game_info` to confirm game is running (check `uptime` and `session_id` fields)
+5. Playtester MCP: test gameplay, verify behavior, capture metrics
+6. If code changes needed: Godot MCP `stop_project` → edit code → `dotnet build` → Godot MCP `run_project`
+
+**IMPORTANT: Always use Godot MCP `run_project` to launch the game.** Never launch via bash/command line — Godot MCP manages the process lifecycle and provides debug output via `get_debug_output`. After launching, call `get_game_info` to confirm the session is fresh (check `uptime` and `session_id` — a new session_id means a fresh start).
+
 ## Connecting Claude Code
 
 ```json
 {
   "mcpServers": {
-    "godot-playtester": {
+    "godot": {
       "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-adapter-http", "http://localhost:9876"]
+      "args": ["@coding-solo/godot-mcp"],
+      "env": {
+        "GODOT_PATH": "path/to/godot executable"
+      }
+    },
+    "godot-playtester": {
+      "command": "node",
+      "args": ["addons/mcp-http-bridge.mjs"],
+      "env": {
+        "MCP_HTTP_URL": "http://localhost:9876"
+      }
     }
   }
 }
 ```
 
-## Minimal Quick-Start Example
-
-A complete working test: WASD player with trail, MCP reads position and controls movement.
-
-### 1. Scene Structure (created via Godot MCP `create_scene` + `add_node`)
-
-```
-TrailTest (Node2D)
-├── Player (CharacterBody2D) [group: "player"]
-│   ├── CollisionShape2D
-│   │   └── Shape: RectangleShape2D (4x4)
-│   └── TrailLine (Line2D)
-├── Background (ColorRect)
-└── Camera2D
-```
-
-### 2. Player Script (`scripts/Player.cs`)
-
-```csharp
-using Godot;
-using System.Collections.Generic;
-
-public partial class Player : CharacterBody2D
-{
-    [Export] public float Speed { get; set; } = 200f;
-    [Export] public float TrailInterval { get; set; } = 0.05f;
-
-    private float _trailTimer;
-    private readonly List<Vector2> _trailPoints = new();
-    private const int MaxTrailPoints = 200;
-
-    public override void _Ready()
-    {
-        AddToGroup("player");
-        CallDeferred(MethodName.RegisterMcpMetrics);
-    }
-
-    public override void _PhysicsProcess(double delta)
-    {
-        var input = Vector2.Zero;
-        if (Input.IsKeyPressed(Key.W)) input.Y -= 1;
-        if (Input.IsKeyPressed(Key.S)) input.Y += 1;
-        if (Input.IsKeyPressed(Key.A)) input.X -= 1;
-        if (Input.IsKeyPressed(Key.D)) input.X += 1;
-
-        Velocity = input.Normalized() * Speed;
-        MoveAndSlide();
-
-        if (Velocity.LengthSquared() > 1f)
-        {
-            _trailTimer += (float)delta;
-            if (_trailTimer >= TrailInterval)
-            {
-                _trailTimer = 0f;
-                _trailPoints.Add(GlobalPosition);
-                if (_trailPoints.Count > MaxTrailPoints)
-                    _trailPoints.RemoveAt(0);
-            }
-        }
-
-        var trail = GetNodeOrNull<Line2D>("TrailLine");
-        if (trail != null)
-        {
-            trail.ClearPoints();
-            foreach (var pt in _trailPoints)
-                trail.AddPoint(ToLocal(pt));
-        }
-    }
-
-    private void RegisterMcpMetrics()
-    {
-        if (GameMcpServer.Instance == null) return;
-        GameMcpServer.Instance.RegisterMetric("player_x", () => GlobalPosition.X);
-        GameMcpServer.Instance.RegisterMetric("player_y", () => GlobalPosition.Y);
-        GameMcpServer.Instance.RegisterMetric("trail_length", () => _trailPoints.Count);
-        GameMcpServer.Instance.RegisterMetric("speed", () => Velocity.Length());
-    }
-}
-```
-
-### 3. Verify via curl
-
-```bash
-# Read state → Player at (0,0)
-curl -s -X POST http://localhost:9876 -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_game_state","arguments":{}}}'
-
-# Move player up for 1 second
-curl -s ... -d '{"...press_key...W...press"}'
-sleep 1
-curl -s ... -d '{"...press_key...W...release"}'
-
-# Read metrics → player_y changed, trail_length > 0
-curl -s ... -d '{"...get_metrics...latest"}'
-# Result: {"player_x":0,"player_y":-256.667,"trail_length":25,"speed":0}
-```
+The `mcp-http-bridge.mjs` bridge handles connection errors gracefully — when the game isn't running, tool calls return a clear error message instead of crashing.
 
 ## Pitfalls & Gotchas
 
-See **debugging.md** for full diagnosis table and detailed fixes.
+See **docs/debugging.md** for full diagnosis table and detailed fixes.
 
 **Most common issues:**
 - MCP tools not appearing → `HandleToolsList()` must use lowercase keys (`name`, `description`, `inputSchema`)
@@ -651,9 +513,20 @@ See **debugging.md** for full diagnosis table and detailed fixes.
 
 ## Playtest Template
 
-See **testing.md** for the full three-phase playtest process (Prep → Execute → Report).
+See **docs/testing.md** for the full three-phase playtest process (Prep → Execute → Report).
 
 **Key rules:**
 1. Write test cases BEFORE operating (`log` intent)
 2. Test one thing at a time, verify with `get_logs()` after each
 3. Every test must have log evidence (closed-loop)
+
+## Documentation Index
+
+| Document | Content |
+|----------|---------|
+| `docs/deploy.md` | Step-by-step installation and configuration |
+| `docs/integration.md` | Game code conventions, drag-and-drop patterns, CanvasLayer handling |
+| `docs/testing.md` | Three-phase playtest process (Prep → Execute → Report) |
+| `docs/debugging.md` | Common pitfalls, root causes, and fixes |
+| `docs/requirements.md` | Dependencies and recommended tools |
+| `docs/quick-start.md` | Minimal working example (WASD player with trail) |
