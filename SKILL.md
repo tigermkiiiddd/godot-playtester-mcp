@@ -179,11 +179,17 @@ public void Refresh()
 
 Note: Node `Name` is ASCII (`Cell_0_0`), but `mcp_data` values can be any language (`铁剑`).
 
-### Drag-and-Drop & Map Selection
+### Dual-Pipeline Input (Physical + Virtual Mouse)
 
-CanvasLayer drag-and-drop and isometric map tile selection require **dual-channel polling** (physical mouse + MCP simulated mouse). The complete implementation patterns are in `docs/integration.md` Steps 7–8.
+Physical mouse and MCP virtual mouse use **Godot's two independent event pipelines** (mouse events + touch events) unified through a single `_mouseWorldPos` field in `_Input`. MCP sends touch events (`InputEventScreenTouch`/`InputEventScreenDrag`) which bypass HUD Control consumption, plus mouse events for button compatibility. All game logic reads `_mouseWorldPos`.
 
-**Key rule**: `Input.IsMouseButtonPressed()` only reflects physical hardware. Always check `GameMcpServer.Instance.SimMouseLeftDown` too. Use `_Input` (not `_UnhandledInput`) for physical mouse drag.
+**Key rules**:
+- Handle mouse clicks in `_Input`, NOT `_UnhandledInput` — HUD Controls with `mouse_filter="Stop"` consume `InputEventMouseButton` before `_UnhandledInput`
+- Touch events are NOT consumed by `mouse_filter="Stop"` Controls — ideal for virtual mouse channel
+- Physical mouse uses `GetGlobalMousePosition()` (world coords), touch events need manual `ScreenToWorld()` conversion
+- Always add phase guard at top of `_Input` to prevent NullReferenceException during cleanup
+
+The complete implementation patterns are in `docs/integration.md` Steps 7–9.
 
 ### Metric Registration Convention
 

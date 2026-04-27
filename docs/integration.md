@@ -132,13 +132,123 @@ private void RegisterMcpMetrics()
 }
 ```
 
-## Step 7: Handle CanvasLayer Drag-and-Drop
+## Step 7: Dual-Pipeline Input — Physical Mouse + MCP Virtual Mouse
 
-`Input.ParseInputEvent` does NOT route events to CanvasLayer children. For drag-and-drop in CanvasLayer-based UI, game scripts need **both** physical mouse support (via `_Input`) and MCP simulated mouse support (via `_Process` polling).
+### The Core Problem
 
-**IMPORTANT**: Use `_Input` (not `_UnhandledInput`) for physical mouse drag. Controls with `MouseFilter.Stop` consume events before `_UnhandledInput` fires. `_Input` fires before GUI processing and always receives the events.
+Godot has two completely independent event pipelines:
+- **Mouse events**: `InputEventMouseMotion`, `InputEventMouseButton`
+- **Touch events**: `InputEventScreenDrag`, `InputEventScreenTouch`
 
-**Physical mouse** goes through `_Input` with `InputEventMouseButton` and `InputEventMouseMotion`. **MCP simulated mouse** is polled from `GameMcpServer.Instance` fields. Both share the same `StartDrag` / `EndDrag` logic.
+HUD Controls with `mouse_filter="Stop"` **consume mouse events** in the GUI processing phase, preventing them from reaching `_UnhandledInput`. But touch events pass through Controls unimpeded.
+
+### Architecture: Unified `_mouseWorldPos` via Dual Pipeline
+
+Both input sources write to a single `_mouseWorldPos` field. All consumers (preview, click handling) read only this field.
+
+```
+Physical mouse motion  → InputEventMouseMotion  → _Input → _mouseWorldPos = GetGlobalMousePosition()
+Virtual mouse motion   → InputEventScreenDrag   → _Input → _mouseWorldPos = ScreenToWorld(pos)
+Physical mouse click   → InputEventMouseButton  → _Input → HandleClick(_mouseWorldPos)
+Virtual mouse click    → InputEventScreenTouch  → _Input → HandleClick(_mouseWorldPos)
+```
+
+**Why `_Input` instead of `_UnhandledInput`?** Controls with `MouseFilter.Stop` consume `InputEventMouseButton` before `_UnhandledInput`. `_Input` fires BEFORE GUI processing, so it always receives events.
+
+### Game Code Pattern
+
+```csharp
+private Vector2 _mouseWorldPos;
+
+public override void _Input(InputEvent @event)
+{
+    if (CurrentPhase == GamePhase.Title || CurrentPhase == GamePhase.Settlement)
+        return;
+
+    // Physical mouse movement
+    if (@event is InputEventMouseMotion)
+    {
+        _mouseWorldPos = GetGlobalMousePosition();
+    }
+    // MCP virtual mouse movement (touch drag, NOT blocked by HUD Controls)
+    else if (@event is InputEventScreenDrag drag)
+    {
+        _mouseWorldPos = ScreenToWorld(drag.Position);
+    }
+    // MCP virtual mouse click (touch event)
+    else if (@event is InputEventScreenTouch touch && touch.Pressed && touch.Index == 0)
+    {
+        _mouseWorldPos = ScreenToWorld(touch.Position);
+        HandleClick(_mouseWorldPos);
+    }
+    // Physical mouse click (must be in _Input, not _UnhandledInput!)
+    else if (@event is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left && mb.Pressed)
+    {
+        HandleClick(_mouseWorldPos);
+    }
+}
+
+private Vector2 ScreenToWorld(Vector2 screenPos)
+{
+    var cam = GetNodeOrNull<Camera2D>("Camera2D");
+    Vector2 camPos = cam != null ? cam.Position : Vector2.Zero;
+    Vector2 zoom = cam != null ? cam.Zoom : new Vector2(22f, 22f);
+    Vector2 vpSize = GetViewport().GetVisibleRect().Size;
+    return (screenPos - vpSize / 2f) / zoom + camPos;
+}
+
+private void HandleClick(Vector2 mouseWorld)
+{
+    if (CurrentPhase == GamePhase.Combat || _timeScaler.IsPaused) return;
+    // ... unified click logic: place tower, select object, etc.
+}
+```
+
+### MCP Tools.Input: Send Both Touch + Mouse Events
+
+The MCP server must send touch events (for game logic) AND mouse events (for HUD button compatibility):
+
+```csharp
+// MoveMouse: touch drag (game logic) + mouse motion (HUD cursor update)
+private string MoveMouse(float x, float y)
+{
+    _simMousePos = new Vector2(x, y);
+    Input.ParseInputEvent(new InputEventScreenDrag { Position = new Vector2(x, y), Index = 0 });
+    Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) });
+    return $"{{\"ok\":true,\"x\":{x},\"y\":{y}}}";
+}
+
+// ClickMouse: touch press (game logic) + mouse button (UI button compat)
+private string ClickMouse(string button, string action, float x, float y)
+{
+    _simMousePos = new Vector2(x, y);
+    bool pressed = action == "press";
+    Input.ParseInputEvent(new InputEventScreenTouch { Pressed = pressed, Position = new Vector2(x, y), Index = 0 });
+    var btnIdx = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left };
+    Input.ParseInputEvent(new InputEventMouseButton { Pressed = pressed, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btnIdx });
+    if (btnIdx == MouseButton.Left) _simMouseLeftDown = pressed;
+    else if (btnIdx == MouseButton.Right) _simMouseRightDown = pressed;
+    return $"{{\"ok\":true,\"button\":\"{button}\",\"x\":{x},\"y\":{y}}}";
+}
+```
+
+### Key Design Decisions
+
+1. **Touch events as virtual mouse channel**: `InputEventScreenTouch`/`InputEventScreenDrag` are NOT consumed by `mouse_filter="Stop"` Controls. This is the key advantage — virtual input reaches `_Input` regardless of HUD layout.
+
+2. **Dual events for compatibility**: MCP sends both touch AND mouse events. Touch events drive game logic (placement, selection). Mouse events ensure `click_element` (via `EmitSignal`) and HUD buttons still work.
+
+3. **No `_Process` polling needed**: All input is handled in `_Input` via Godot's native event pipeline. No need for `PollMcpMouse()` or frame-level polling.
+
+4. **Coordinate conversion difference**: Physical mouse uses `GetGlobalMousePosition()` (already in world coords via Camera2D). Touch events only have screen coords and need manual `ScreenToWorld()` conversion.
+
+5. **Phase guard in `_Input`**: Always check game phase at the top of `_Input` to avoid NullReferenceException when objects are being cleaned up.
+
+## Step 8: Drag-and-Drop (Physical Mouse Priority)
+
+For CanvasLayer-based drag-and-drop UI, physical mouse uses `_Input` with `InputEventMouseButton`/`InputEventMouseMotion`, and MCP simulated mouse uses `_Process` polling. Both share the same `StartDrag`/`EndDrag` logic.
+
+**Physical mouse** goes through `_Input`. **MCP simulated mouse** is polled from `GameMcpServer.Instance` fields.
 
 ```csharp
 // ── State ──────────────────────────────────────────────────────
@@ -238,19 +348,17 @@ private InventoryCell HitTestCell(Vector2 mousePos)
 
 For buttons, `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which bypasses the CanvasLayer routing issue.
 
-## Step 8: Map/Area Selection via Dual-Channel Polling
+## Step 9: Map/Area Selection via Dual-Channel Polling
 
-**Scenario**: Isometric map with drag-to-select tile regions. The drag happens on a Node2D (IsoScene), not a CanvasLayer Control, but the HUD that reads the drag state lives inside a CanvasLayer. Neither `_Input` nor `Input.IsMouseButtonPressed` reflects MCP simulated mouse state.
+**Scenario**: Isometric map with drag-to-select tile regions. The drag happens on a Node2D (IsoScene), not a CanvasLayer Control, but the HUD that reads the drag state lives inside a CanvasLayer.
 
 **Solution**: Merge both channels into a single `_Process` polling method with coordinate conversion:
 
 ```csharp
-// ── Zone drag: dual-channel polling in _Process ──────────────
 private void HandleZoneInput()
 {
     if (_isoScene == null) return;
 
-    // Dual-channel: physical mouse + MCP simulated mouse
     bool physDown = Input.IsMouseButtonPressed(MouseButton.Left);
     var mcp = GameMcpServer.Instance;
     bool mcpDown = mcp != null && mcp.SimMouseLeftDown;
@@ -261,15 +369,14 @@ private void HandleZoneInput()
         Vector2 worldPos;
         if (!physDown && mcpDown)
         {
-            // MCP mode: SimMousePos is screen coords, convert to world
             var vpSize = GetViewport().GetVisibleRect().Size;
             var cam = _isoScene.GetParent()?.GetNodeOrNull<Camera2D>("Camera2D");
             var camPos = cam != null ? cam.Position : Vector2.Zero;
-            worldPos = mcp.SimMousePos - vpSize / 2f + camPos;
+            var zoom = cam != null ? cam.Zoom : new Vector2(22f, 22f);
+            worldPos = (mcp.SimMousePos - vpSize / 2f) / zoom + camPos;
         }
         else
         {
-            // Physical mouse: use standard conversion
             worldPos = _isoScene.ToLocal(_isoScene.GetGlobalMousePosition());
         }
         var tile = IsoScene.WorldToTile(worldPos);
@@ -289,11 +396,11 @@ private void HandleZoneInput()
 
 **Key points**:
 - `Input.IsMouseButtonPressed()` only reflects physical hardware — always check `mcp.SimMouseLeftDown` too
-- `SimMousePos` is screen coordinates — must convert via camera offset to get world coordinates
+- `SimMousePos` is screen coordinates — must convert via camera zoom and position to get world coordinates
 - Physical mouse uses `GetGlobalMousePosition()` / `ToLocal()`, MCP uses manual screen→world math
-- Use `execute_macro` with `drag` action for MCP zone selection (not separate press/move/release calls which process too fast)
+- Use `execute_macro` with `drag` action for MCP zone selection
 
-**MCP test pattern** for selecting specific tiles — use single-point drags to accumulate individual tiles:
+**MCP test pattern** for selecting specific tiles — use single-point drags:
 ```json
 {"steps": [
   {"action": "drag", "from_x": 516, "from_y": 268, "to_x": 516, "to_y": 268, "duration": 0.3, "button": "left"},
