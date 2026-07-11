@@ -1,3 +1,4 @@
+#nullable disable
 using System;
 namespace GodotPlaytester;
 using System.Collections;
