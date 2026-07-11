@@ -6,12 +6,13 @@ description: |
   simulate player input, capture game screenshots, monitor game metrics, verify game behavior,
   remote-control a running Godot game, or do closed-loop game testing.
   Includes a three-phase testing workflow with MANDATORY boundary/edge case testing: Prep (write test cases including cancel/backward/state-recovery scenarios) → Execute (happy path + boundary cases, one at a time with log verification) → Report (evidence-based summary).
-  IMPORTANT: Always use MCP tools directly. NEVER use curl + python to query the MCP server — the MCP adapter handles all JSON/encoding automatically.
 ---
 
 # Godot Play Tester
 
-Embeds an MCP server into a Godot 4 (.NET) game. AI agents can query game state, simulate input, capture screenshots, monitor metrics, and run automated tests.
+Embeds an MCP server (all classes in the `GodotPlaytester` namespace) into a Godot 4 (.NET) game. AI agents can query game state, simulate input, capture screenshots, monitor metrics, and run automated tests.
+
+The library core is **genre-free**: state query, UI control, raw input simulation, macros, metrics, logging, and testing work the same for an action game, a turn-based tactics game, a point-and-click adventure, or a card game. A couple of helpers (`move_to`/`move_distance`) assume a single WASD-style avatar and are called out below as action-game-specific. For anything else, games expose their own vocabulary as MCP tools — see "Adapting to Your Game (Semantic Tools)".
 
 ## When to Use
 
@@ -24,19 +25,24 @@ Embeds an MCP server into a Godot 4 (.NET) game. AI agents can query game state,
 
 ### Required
 - Godot 4.6+ with .NET/C# support
-- `mcp-http-bridge.mjs` bridge script (in addon directory)
+- The server only runs in **debug builds** — release builds skip it entirely, so it never ships to players
 
 ### Recommended
-- [godot-mcp](https://github.com/Coding-Solo/godot-mcp) (`@coding-solo/godot-mcp`) — Editor-side MCP for creating scenes, adding nodes, running the project, reading debug output. Pairs with this runtime MCP for full edit→build→run→test workflow.
+- An editor-side MCP server for creating scenes, adding nodes, running the project, and reading debug output (e.g. [godot-mcp](https://github.com/Coding-Solo/godot-mcp)). Pairs with this runtime MCP for a full edit→build→run→test loop, but is not required — the runtime server works standalone against any running debug build.
 
-## Quick Start
+## Installation
 
-Read `${CLAUDE_SKILL_DIR}/docs/deploy.md` for the full deployment guide. Summary:
+Two options:
 
-1. Copy all files from `src/` (14 partial class files) into the project
-2. Add as Autoload in Project Settings
-3. Tag game objects with Godot Groups (see Protocol below)
-4. Run the game — MCP server starts on `http://localhost:9876`
+**(a) Git submodule** (tracks upstream):
+```bash
+git submodule add https://github.com/tigermkiiiddd/godot-playtester-mcp.git addons/godot_playtester_mcp
+```
+Then add `res://addons/godot_playtester_mcp/src/GameMcpServer.cs` as an Autoload in Project Settings.
+
+**(b) Copy files**: copy all 15 files from `src/` anywhere in your project, then add `GameMcpServer.cs` as an Autoload.
+
+Either way: all classes live in the `GodotPlaytester` namespace, the server starts only in debug builds, and it listens on `http://localhost:9876` by default (`[Export] public int Port`).
 
 ## Two Testing Modes
 
@@ -58,30 +64,30 @@ start_test(scene, duration=30) → ... wait ... → get_test_results(metrics, sc
 
 ## Game Development Protocol
 
-The MCP server reads game state through **Godot Groups** and **Control node names**. Games must follow these conventions for MCP to work.
+The MCP server reads game state through **Godot Groups** you tag objects with, and **Control node names**. Some conventions below are real library contracts (`mcp_ui`, `mcp_ignore`, ASCII node names); others are just a default vocabulary you're free to replace with your own via registered tools.
 
 ### Group Naming Convention
 
-Tag all game objects with standard groups. The MCP server queries these groups automatically.
+`get_game_state` discovers world objects through Godot Groups. The table below is a **default vocabulary** suited to action/avatar games — it is not required. Games define their own ontology; `get_game_state(groups=...)` accepts any group names you've tagged objects with.
 
-| Group | Purpose | Required |
-|-------|---------|----------|
-| `player` | Player node (must be exactly one) | Yes |
-| `enemies` | Enemy characters | Recommended |
-| `npcs` | NPC characters | Recommended |
-| `items` | Ground pickups | Recommended |
-| `interactables` | Doors, chests, switches | Recommended |
-| `projectiles` | Bullets, spells | Optional |
-| `triggers` | Trigger zones | Optional |
-| `mcp_ui` | UI node that should appear in `get_ui_layout` whitelist | For non-standard controls |
-| `mcp_ignore` | Never appear in `get_ui_layout` (hard exclusion) | For noisy nodes |
+| Group | Purpose | Notes |
+|-------|---------|-------|
+| `player` | Player-controlled unit | Only needed by tools that reference "the player" specifically, e.g. `move_to`/`radius` filtering. Turn-based, multi-unit, or non-avatar games can skip it entirely and query their own groups. |
+| `enemies` | Enemy characters | Default suggestion |
+| `npcs` | NPC characters | Default suggestion |
+| `items` | Ground pickups | Default suggestion |
+| `interactables` | Doors, chests, switches | Default suggestion |
+| `projectiles` | Bullets, spells | Default suggestion |
+| `triggers` | Trigger zones | Default suggestion |
+| `mcp_ui` | UI node that should appear in `get_ui_layout` whitelist | Library contract — for non-standard controls |
+| `mcp_ignore` | Never appear in `get_ui_layout` (hard exclusion) | Library contract — for noisy nodes |
 
 ```csharp
 // In your game scripts:
 public override void _Ready()
 {
     AddToGroup("player");
-    // or: AddToGroup("enemies");
+    // or: AddToGroup("enemies"); or any group name your game defines
 }
 ```
 
@@ -99,24 +105,21 @@ var healBtn = new Button { Name = "HealBtn", Text = "治疗" };
 
 Name all UI Control nodes descriptively. MCP extracts type, text, value, and rect automatically.
 
-### Button Callback Convention (Disabled Guard)
+### Button Callback Convention (Defense in Depth)
 
-`click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which **bypasses the `Disabled` property**. A disabled button still fires when clicked via MCP.
+By default `click_element` refuses to click a `Disabled` or not-visible button (a real player couldn't click it either) — see Pitfalls. Passing `force:true` bypasses that check, and also skips hit-testing, so it should be used sparingly (e.g. deliberately confirming a disabled button truly does nothing when triggered).
 
-**Development paradigm**: MCP operates at the signal level, it does not replicate UI state checks. Game code must be defensive — every button callback MUST guard its own preconditions:
+Because `force` exists, button callbacks should still guard their own preconditions defensively:
 
 ```csharp
-// WRONG — assumes signal only fires when button is interactive
-healBtn.Pressed += () => DoHeal();
-
-// CORRECT — callback validates its own preconditions
+// Defensive — callback validates its own preconditions even if the signal fires unexpectedly
 healBtn.Pressed += () => {
     if (healBtn.Disabled) return;
     DoHeal();
 };
 ```
 
-This is a coding convention for MCP-compatible games. The principle: **signal firing ≠ user intent. Game code owns its state guards.**
+**Principle**: MCP operates at the signal level, it does not replicate UI state checks. Game code owns its own state guards.
 
 ### get_ui_layout Whitelist Rules
 
@@ -179,17 +182,11 @@ public void Refresh()
 
 Note: Node `Name` is ASCII (`Cell_0_0`), but `mcp_data` values can be any language (`铁剑`).
 
-### Dual-Pipeline Input (Physical + Virtual Mouse)
+### Virtual Mouse Input
 
-Physical mouse and MCP virtual mouse use **Godot's two independent event pipelines** (mouse events + touch events) unified through a single `_mouseWorldPos` field in `_Input`. MCP sends touch events (`InputEventScreenTouch`/`InputEventScreenDrag`) which bypass HUD Control consumption, plus mouse events for button compatibility. All game logic reads `_mouseWorldPos`.
+The MCP virtual mouse (`click_mouse`, `move_mouse`, `drag`, and macro `click`/`drag` steps) emits both touch events (`InputEventScreenTouch`/`InputEventScreenDrag`) and mouse events (`InputEventMouseButton`/`InputEventMouseMotion`) at the OS-event level, so most games need no special handling — it looks like ordinary input to both UI Controls and gameplay code.
 
-**Key rules**:
-- Handle mouse clicks in `_Input`, NOT `_UnhandledInput` — HUD Controls with `mouse_filter="Stop"` consume `InputEventMouseButton` before `_UnhandledInput`
-- Touch events are NOT consumed by `mouse_filter="Stop"` Controls — ideal for virtual mouse channel
-- Physical mouse uses `GetGlobalMousePosition()` (world coords), touch events need manual `ScreenToWorld()` conversion
-- Always add phase guard at top of `_Input` to prevent NullReferenceException during cleanup
-
-The complete implementation patterns are in `docs/integration.md` Steps 7–9.
+If your game unifies physical and virtual pointer input into a single custom pipeline (e.g. one field read by both click-to-move and drag-select logic), see `docs/integration.md` for that (optional) pattern.
 
 ### Metric Registration Convention
 
@@ -297,6 +294,40 @@ GameMcpServer.Instance?.Log("ui", "背包打开");
 3. If log entry missing → operation may not have reached game code
 ```
 
+## Adapting to Your Game (Semantic Tools)
+
+This is the **primary** mechanism for fitting the MCP surface to your game's genre. The library core is genre-free; genre vocabulary belongs to the game, exposed via tools the game registers itself:
+
+```csharp
+public override void _Ready()
+{
+    CallDeferred(RegisterMcpTools);
+}
+
+private void RegisterMcpTools()
+{
+    if (GameMcpServer.Instance == null) return;
+
+    GameMcpServer.Instance.RegisterTool(
+        "my_move_unit",
+        "Move a unit to a target grid cell on the tactics grid.",
+        Schema("{\"unit_id\":{\"type\":\"string\"},\"target_cell\":{\"type\":\"string\"}}", "object"),
+        args =>
+        {
+            var unitId = args["unit_id"].GetString();
+            var cell = args["target_cell"].GetString();
+            BattleController.Instance.RequestMove(unitId, cell); // fire-and-forget
+            return "{\"ok\":true}";
+        });
+
+    // e.g. for a tactics game: my_use_skill, my_end_turn, my_select_unit ...
+}
+```
+
+Route each handler through your game's own logic layer — the same code path a human click or keypress would trigger — instead of reimplementing rules inside the handler.
+
+**Threading rule**: handlers run on the Godot main thread. Don't `await` a long-running or async game operation inline — fire it off (queue an action, set a flag, kick off a coroutine-equivalent) and return immediately. Have the agent poll `get_game_state`, `get_logs`, or a registered query tool to observe when the action completes.
+
 ## Built-in Tools
 
 ### State & Structure (primary feedback channels)
@@ -305,7 +336,7 @@ GameMcpServer.Instance?.Log("ui", "背包打开");
 |------|-------------|----------------|
 | `get_game_state` | Structured world state by Groups. Returns positions, distances. **Main feedback channel.** | `groups`, `radius`, `near_x/y`, `limit`, `offset` |
 | `get_ui_layout` | UI Controls as **nested tree** (like DOM). Type, name, rect, text, children, focus, editable. **Whitelist mode** by default: only shows tagged/interactive nodes. Grid compression: `detail=compact` (default, core fields only) or `detail=full` (all mcp_data fields). | `visible_only`, `types`, `tagged_only` (default true), `path` (subtree root), `max_depth` (default 8), `detail` (compact/full) |
-| `get_scene_tree` | Full scene tree structure | none |
+| `get_scene_tree` | Full scene tree structure, recursive | `max_depth` (default 6) |
 | `get_node_properties` | Properties of a specific node | `path` |
 | `get_game_info` | FPS, window size, engine version | none |
 
@@ -313,7 +344,7 @@ GameMcpServer.Instance?.Log("ui", "背包打开");
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `click_element` | Click UI element by name or path (uses rect center) | `name`, `path`, `button`, `offset_x/y` |
+| `click_element` | Click UI element by name or path (uses rect center). Refuses `Disabled` or not-visible buttons by default — a real player couldn't click them. `force:true` bypasses that check (and hit-testing); use sparingly. | `name`, `path`, `button`, `offset_x/y`, `force` |
 | `type_text` | Input text into LineEdit/TextEdit (set or type mode) | `target`, `text`, `mode` (set/type) |
 | `select_option` | Select item in OptionButton/ItemList by index | `name`, `path`, `index` |
 | `get_focused_element` | Get currently focused UI Control | none |
@@ -335,9 +366,15 @@ GameMcpServer.Instance?.Log("ui", "背包打开");
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `screenshot` | Capture frame as base64 image. **Use sparingly — prefer structured queries.** | `format` (jpeg/png), `quality` |
+| `screenshot` | Capture current frame, returned as an MCP image content block. **Use sparingly — prefer structured queries.** | `format` (jpeg/png), `quality`, `max_width` (default 960, downsizes oversized captures) |
 | `register_metric` | Register a numeric metric | `name`, `source_type`, `node_path`, `sample_rate` |
 | `get_metrics` | Get metric values | `names`, `format` (latest/timeline/csv) |
+
+### Diagnostics
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `time_scale` | Get or set `Engine.TimeScale` (range 0.1–20). Fast-forward playtests (e.g. long balance runs). Omit `scale` to just read the current value. | `scale` (optional) |
 
 ### Test Runner
 
@@ -373,6 +410,8 @@ GameMcpServer.Instance?.Log("ui", "背包打开");
 | `list_macros` | List macros, optionally filtered by status | `status` (running/completed/cancelled/error) |
 
 **Step action types**: `hold_key` (press for duration), `tap_key` (instant press+release), `repeat_key` (press N times with interval), `combo_keys` (multiple keys simultaneously), `move_distance` (hold direction until player moves X pixels), `move_to` (walk to target world coordinates, supports 8dir/4dir/free), `click` (mouse), `drag` (press-move-release), `double_click` (fast two clicks), `type_text` (character-by-character input), `wait` (delay).
+
+**`move_distance` and `move_to` are action-game helpers**: they simulate WASD-style movement keys/positions against a single `player`-group avatar. For turn-based, point-and-click, or strategy games, skip these two step types and register semantic tools instead (see "Adapting to Your Game" above) — e.g. a `my_move_unit` tool that moves a specific unit on a grid, rather than holding a direction key.
 
 **move_to modes** (set `mode` parameter):
 - `8dir` (default) — diagonal allowed, WASD, axes finish independently. For 8-directional games.
@@ -419,31 +458,31 @@ GameMcpServer.Instance?.Log("ui", "背包打开");
 | `set_node_property` | Set a property on a node | `path`, `property`, `value` |
 | `call_node_method` | Call a method on a node | `path`, `method`, `args` |
 
-## MANDATORY: Game Launch Sequence
+## Game Launch Sequence
 
-**Before ANY playtester MCP tool call, the game MUST be running.** Follow this exact sequence:
+Before any playtester MCP tool call, the game must be running. Sequence:
 
-1. **`dotnet build`** — compile C# changes (godot-mcp `run_project` does NOT trigger C# compilation)
-2. **godot-mcp `run_project`** — launch the game from the editor
-3. **Playtester `get_game_info`** — confirm game is running (check `uptime` > 0 and `session_id` is fresh)
+1. **`dotnet build`** — compile C# changes (many editor "run project" actions do not trigger C# compilation on their own)
+2. **Launch the game** — prefer your editor-side MCP server's run tool if you have one (it manages process lifecycle and surfaces debug output for you); otherwise launch the Godot binary directly with `godot --path <project>` (or run an exported debug build)
+3. **Playtester `get_game_info`** — confirm the game is running (check `uptime` > 0 and `session_id` is fresh)
 
-**NEVER launch the game via bash/command line.** Godot MCP manages the process lifecycle and provides debug output via `get_debug_output`.
+Launching through an editor-managed process is preferred when available, for clean lifecycle management and captured debug output — but a plain shell launch works too; you'll just need your own way to read stdout/stderr and to clean up stray processes (see Pitfalls).
 
 If code changes are needed mid-test:
 ```
-godot-mcp stop_project → edit code → dotnet build → godot-mcp run_project → get_game_info (verify fresh session)
+stop the game → edit code → dotnet build → relaunch → get_game_info (verify fresh session)
 ```
 
 ## Agent Usage Guide
 
-**IMPORTANT: NEVER use `curl` + `python` to query the MCP server.** Always use MCP tools directly through the configured MCP adapter. The adapter handles JSON parsing, Chinese text, and protocol details automatically. Raw curl on Windows terminals produces garbled Chinese and requires manual JSON parsing.
+**Prefer MCP tools directly over shelling out to `curl`.** The MCP adapter handles JSON parsing, non-ASCII text, and protocol details automatically. On Windows terminals specifically, raw `curl` output is displayed through the GBK codepage, which garbles Chinese (or other non-ASCII) text and forces manual JSON parsing — use it only for isolated debugging, and be ready to re-decode the output.
 
 When testing a game, follow this priority:
 
 1. **`get_game_state`** — understand world state (enemies, items, positions)
 2. **`get_ui_layout`** — find buttons, read HP bars, check inventory UI
 3. **`get_metrics`** — read numeric trends (HP over time, score progression)
-4. **`press_key` / `click_mouse`** — take action based on structured data
+4. **`press_key` / `click_mouse`** (or your game's registered semantic tools) — take action based on structured data
 5. **`screenshot`** — only when you need to see visuals (layout bugs, animations, missing sprites)
 
 ### Example: Agent picks up a health potion
@@ -465,7 +504,7 @@ When testing a game, follow this priority:
 6. Analyze metrics_timeline: who died first? HP curves?
 ```
 
-### Example: Agent walks and attacks using macro
+### Example: Agent walks and attacks using macro (action game)
 
 ```
 1. get_game_state() → see enemy at distance
@@ -478,25 +517,25 @@ When testing a game, follow this priority:
 4. get_game_state() → verify enemy dead or player position changed
 ```
 
-## Recommended: Pair with Godot MCP
+## Recommended: Pair with an Editor-Side MCP
 
-For the best development workflow, use alongside [godot-mcp](https://github.com/Coding-Solo/godot-mcp) (`@coding-solo/godot-mcp`). The two MCP servers complement each other:
+For the best development workflow, use alongside an editor-side MCP server such as [godot-mcp](https://github.com/Coding-Solo/godot-mcp) (`@coding-solo/godot-mcp`). The two kinds of MCP servers complement each other:
 
-| | Godot MCP (Editor) | Playtester MCP (Runtime) |
+| | Editor-side MCP | Playtester MCP (this library, runtime) |
 |---|---|---|
 | **Works when** | Editor is open | Game is running |
 | **Does** | Create scenes, add nodes, run project, read debug output | Query game state, simulate input, capture screenshots, metrics |
 | **Scope** | Project structure & assets | Live game simulation |
 
 **Typical workflow:**
-1. Godot MCP: create scene, add nodes, attach scripts
-2. `dotnet build` (Godot MCP `run_project` does NOT trigger C# compilation)
-3. Godot MCP: `run_project` to launch game
-4. Playtester MCP: `get_game_info` to confirm game is running (check `uptime` and `session_id` fields)
+1. Editor-side MCP: create scene, add nodes, attach scripts
+2. `dotnet build` (many editor "run project" actions do NOT trigger C# compilation)
+3. Editor-side MCP: launch the game
+4. Playtester MCP: `get_game_info` to confirm the game is running (check `uptime` and `session_id` fields)
 5. Playtester MCP: test gameplay, verify behavior, capture metrics
-6. If code changes needed: Godot MCP `stop_project` → edit code → `dotnet build` → Godot MCP `run_project`
+6. If code changes needed: stop the game → edit code → `dotnet build` → relaunch
 
-**IMPORTANT: Always use Godot MCP `run_project` to launch the game.** Never launch via bash/command line — Godot MCP manages the process lifecycle and provides debug output via `get_debug_output`. After launching, call `get_game_info` to confirm the session is fresh (check `uptime` and `session_id` — a new session_id means a fresh start).
+Launching through the editor-side MCP is convenient (it manages process lifecycle and provides debug output), but not required — the runtime server works the same regardless of how the game process was started. After launching, call `get_game_info` to confirm the session is fresh (check `uptime` and `session_id` — a new `session_id` means a fresh start).
 
 ## Connecting Claude Code
 
@@ -525,14 +564,11 @@ Direct HTTP connection — no bridge script. The server negotiates MCP protocol 
 See **docs/debugging.md** for full diagnosis table and detailed fixes.
 
 **Most common issues:**
-- MCP tools not appearing → `HandleToolsList()` must use lowercase keys (`name`, `description`, `inputSchema`)
 - Chinese node names fail → Use ASCII-only `Name` property, any-language `Text`
-- **Disabled button still fires via `click_element`** → `EmitSignal` bypasses `Disabled` state. Check `get_ui_layout` for `disabled: true` before clicking
-- `JsonNode parent` error → Use `id?.DeepClone()` in RpcResult
-- Drag cancels immediately → Add `_dragFromRealMouse` flag for mutual exclusion
+- `click_element` refuses a `Disabled` or not-visible button → intentional (a real player couldn't click it either). Check `get_ui_layout` for `disabled: true`, or pass `force:true` to bypass — but `force` also skips hit-testing, so use it sparingly
 - `tap_key` not working → Use `hold_key` with duration instead
 - Stale DLL → `dotnet build --no-incremental`
-- Multiple Godot processes → `tasklist | grep Godot` and kill old one
+- Multiple Godot processes → find and kill stray old processes (e.g. `tasklist | grep Godot` on Windows) before relaunching
 
 ## Playtest Template
 

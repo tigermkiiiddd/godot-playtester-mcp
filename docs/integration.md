@@ -134,6 +134,8 @@ private void RegisterMcpMetrics()
 
 ## Step 7: Dual-Pipeline Input — Physical Mouse + MCP Virtual Mouse
 
+**This step is OPTIONAL.** The MCP virtual mouse already emits both touch and mouse events at the OS-event level, so most games need no special handling. Only follow this pattern if your game unifies physical and virtual pointer input into a single custom field/pipeline.
+
 ### The Core Problem
 
 Godot has two completely independent event pipelines:

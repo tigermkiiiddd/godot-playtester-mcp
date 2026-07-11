@@ -5,7 +5,6 @@
 | Dependency | Version | Notes |
 |---|---|---|
 | Godot Engine | 4.6+ | .NET/C# support |
-| Node.js | 18+ | For mcp-http-bridge.mjs |
 
 ## Recommended
 

@@ -30,21 +30,23 @@ AI agents connect to your **running** Godot game and can:
 | **Read/write logs** | Three-tier logging (AI log, file log, debug log) |
 | **Run automated tests** | Balance testing, regression, QA scenarios |
 
-**34 built-in tools** covering state query, UI control, input simulation, macro execution, metrics, testing, and logging.
+**35 built-in tools** covering state query, UI control, input simulation, macro execution, metrics, diagnostics, testing, and logging — plus any semantic tools your game registers itself.
 
-## Quick Start (3 steps)
+## Installation
 
-**Step 1** — Copy 15 C# files into your project:
+**Option A — git submodule** (tracks upstream):
 
 ```bash
-cp src/*.cs <your_project>/addons/game_mcp/
+git submodule add https://github.com/tigermkiiiddd/godot-playtester-mcp.git addons/godot_playtester_mcp
 ```
 
-**Step 2** — Register as Autoload in Godot:
+Then add `res://addons/godot_playtester_mcp/src/GameMcpServer.cs` as an Autoload in Project Settings.
 
-Project Settings → Autoload → Add `GameMcpServer.cs`
+**Option B — copy files**: copy all 15 files from `src/` anywhere in your project, then add `GameMcpServer.cs` as an Autoload.
 
-**Step 3** — Tag your game objects:
+All classes live in the `GodotPlaytester` namespace. The server starts only in **debug builds** (release builds skip it) and listens on `http://localhost:9876` by default.
+
+**Tag your game objects** so `get_game_state` can find them (groups are your own vocabulary — `player`/`enemies`/etc. are just a default suggestion, see the skill doc):
 
 ```csharp
 public override void _Ready()
@@ -53,7 +55,7 @@ public override void _Ready()
 }
 ```
 
-Run the game. MCP server starts on `http://localhost:9876`. Done.
+Run the game. Done.
 
 ## Zero-Intrusion Design
 
@@ -96,6 +98,9 @@ Supports: `hold_key`, `tap_key`, `repeat_key`, `combo_keys`, `move_distance`, `m
 ### Visual & Metrics
 `screenshot` `register_metric` `get_metrics`
 
+### Diagnostics
+`time_scale`
+
 ### Test Runner
 `start_test` `get_test_results`
 
@@ -133,6 +138,7 @@ Supports: `hold_key`, `tap_key`, `repeat_key`, `combo_keys`, `move_distance`, `m
 │   ├── GameMcpServer.MacroTypes.cs   Macro data types
 │   ├── GameMcpServer.Macro.cs        Macro execution engine
 │   ├── GameMcpServer.MacroTools.cs   Macro MCP tools
+│   ├── IInputProvider.cs             Input abstraction interface
 │   └── RingBuffer.cs                 Ring buffer utility
 ├── docs/              ← Documentation
 │   ├── deploy.md
@@ -140,7 +146,7 @@ Supports: `hold_key`, `tap_key`, `repeat_key`, `combo_keys`, `move_distance`, `m
 │   ├── testing.md
 │   ├── debugging.md
 │   └── requirements.md
-└── skill.md           ← Claude Code skill definition
+└── SKILL.md           ← Claude Code skill definition
 ```
 
 ## Requirements
