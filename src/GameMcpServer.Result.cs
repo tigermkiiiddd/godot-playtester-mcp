@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json;
 
+
 /// <summary>
 /// Type-safe MCP tool response builder. Eliminates hand-written JSON string interpolation
 /// which is vulnerable to injection from node names containing quotes/special chars.

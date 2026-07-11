@@ -34,7 +34,7 @@ AI agents connect to your **running** Godot game and can:
 
 ## Quick Start (3 steps)
 
-**Step 1** — Copy 14 C# files into your project:
+**Step 1** — Copy 15 C# files into your project:
 
 ```bash
 cp src/*.cs <your_project>/addons/game_mcp/
@@ -64,12 +64,14 @@ Run the game. MCP server starts on `http://localhost:9876`. Done.
 
 ## Connect Claude Code
 
+Direct HTTP — no bridge script needed (the server speaks MCP Streamable-HTTP-compatible JSON-RPC: protocol version negotiation, 202 for notifications):
+
 ```json
 {
   "mcpServers": {
     "godot-playtester": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-adapter-http", "http://localhost:9876"]
+      "type": "http",
+      "url": "http://localhost:9876"
     }
   }
 }

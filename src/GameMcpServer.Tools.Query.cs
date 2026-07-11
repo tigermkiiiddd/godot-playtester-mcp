@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+
 public partial class GameMcpServer
 {
     // ── get_game_state ───────────────────────────────────────────────────

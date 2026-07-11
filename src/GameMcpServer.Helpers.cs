@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 
+
 /// <summary>
 /// Shared utilities for MCP tool implementations. Eliminates duplicated patterns.
 /// </summary>

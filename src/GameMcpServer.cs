@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 
+
 /// <summary>
 /// GameMcpServer — exposes a running Godot game to AI agents via the MCP protocol.
 ///
@@ -96,11 +97,15 @@ public partial class GameMcpServer : Node, IInputProvider
     // Thread-safe action queue (HTTP thread → main thread)
     private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _mainQueue = new();
 
-    public override void _EnterTree() => Instance = this;
+    public override void _EnterTree()
+    {
+        Instance = this;
+        ProcessMode = ProcessModeEnum.Always; // 游戏暂停时服务器照常响应，否则所有调用 10s 静默超时
+    }
 
     public override void _Ready()
     {
-        if (!Enabled) return;
+        if (!Enabled || !OS.IsDebugBuild()) return; // 发布版永不开端口
         _simMousePos = DisplayServer.WindowGetSize() / 2; // center of screen
         RegisterBuiltinTools();
         RegisterMacroTools();
@@ -193,12 +198,12 @@ public partial class GameMcpServer : Node, IInputProvider
     /// <summary>Log an error.</summary>
     public void LogError(string category, string message) => Log(category, message, LogLevel.Error);
 
-    /// <summary>Log high-volume data to a file (project_dir/debug_logs/category_date.log).</summary>
+    /// <summary>Log high-volume data to a file (user://mcp_logs/category_date.log).</summary>
     public void FileLog(string category, string message)
     {
         try
         {
-            var dir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "debug_logs");
+            var dir = ProjectSettings.GlobalizePath("user://mcp_logs");
             System.IO.Directory.CreateDirectory(dir);
             var date = DateTime.Now.ToString("yyyyMMdd");
             var path = System.IO.Path.Combine(dir, $"{category}_{date}.log");
@@ -293,4 +298,11 @@ public struct LogEntry
 
     public LogEntry(LogType type, LogLevel level, double timestamp, string category, string message)
     { Type = type; Level = level; Timestamp = timestamp; Category = category; Message = message; }
+}
+
+/// <summary>Image tool-call result — routed to MCP "image" content blocks instead of text/base64-in-JSON.</summary>
+public sealed class McpImageResult
+{
+    public string Base64;
+    public string MimeType;
 }

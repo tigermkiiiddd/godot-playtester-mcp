@@ -6,29 +6,34 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+
 public partial class GameMcpServer
 {
     // ── scene tree / node ops ────────────────────────────────────────────
 
-    private string GetSceneTreeJson()
+    private string GetSceneTreeJson(Dictionary<string, JsonElement> args)
     {
-        var tree = GetTree();
-        return tree == null ? "{\"error\":\"No scene tree\"}" : SerializeNode(tree.CurrentScene, "");
+        int maxDepth = args.ContainsKey("max_depth") ? args["max_depth"].GetInt32() : 6;
+        var scene = GetTree()?.CurrentScene;
+        if (scene == null) return "{\"error\":\"No current scene\"}";
+        return JsonSerializer.Serialize(BuildSceneNode(scene, 0, maxDepth), JsonOpts);
     }
 
-    private string SerializeNode(Node n, string indent)
+    private JsonObject BuildSceneNode(Node n, int depth, int maxDepth)
     {
-        if (n == null) return "null";
-        var sb = new StringBuilder();
-        var c = n.GetChildCount();
-        sb.AppendLine($"{indent}{{");
-        sb.AppendLine($"{indent}  \"path\": \"{n.GetPath().ToString()}\",");
-        sb.AppendLine($"{indent}  \"type\": \"{n.GetType().Name}\",");
-        sb.AppendLine($"{indent}  \"name\": \"{n.Name.ToString()}\",");
-        sb.AppendLine($"{indent}  \"children\": {c}");
-        if (c > 0) { sb.AppendLine($"{indent}  \"child_types\": ["); for (int i = 0; i < c; i++) { var ch = n.GetChild(i); sb.Append($"{indent}    \"{ch.GetType().Name}\"{(i < c - 1 ? "," : "")}\n"); } sb.AppendLine($"{indent}  ]"); }
-        sb.Append($"{indent}}}");
-        return sb.ToString();
+        var o = new JsonObject
+        {
+            ["name"] = n.Name.ToString(),
+            ["type"] = n.GetType().Name,
+            ["child_count"] = n.GetChildCount()
+        };
+        if (depth < maxDepth && n.GetChildCount() > 0)
+        {
+            var arr = new JsonArray();
+            foreach (var ch in n.GetChildren()) arr.Add(BuildSceneNode(ch, depth + 1, maxDepth));
+            o["children"] = arr;
+        }
+        return o;
     }
 
     private string GetNodeProperties(string path)

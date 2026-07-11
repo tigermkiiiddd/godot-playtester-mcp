@@ -511,17 +511,14 @@ For the best development workflow, use alongside [godot-mcp](https://github.com/
       }
     },
     "godot-playtester": {
-      "command": "node",
-      "args": ["addons/mcp-http-bridge.mjs"],
-      "env": {
-        "MCP_HTTP_URL": "http://localhost:9876"
-      }
+      "type": "http",
+      "url": "http://localhost:9876"
     }
   }
 }
 ```
 
-The `mcp-http-bridge.mjs` bridge handles connection errors gracefully — when the game isn't running, tool calls return a clear error message instead of crashing.
+Direct HTTP connection — no bridge script. The server negotiates MCP protocol versions (2024-11-05 / 2025-03-26 / 2025-06-18), returns 202 for notifications, and reports tool failures via `isError` per spec. When the game isn't running, the client reports a connection error for that server; other servers are unaffected.
 
 ## Pitfalls & Gotchas
 

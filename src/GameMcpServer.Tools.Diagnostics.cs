@@ -6,19 +6,38 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+
 public partial class GameMcpServer
 {
     // ── screenshot ───────────────────────────────────────────────────────
 
-    private string TakeScreenshot(string format, int quality)
+    private McpImageResult TakeScreenshot(string format, int quality, int maxWidth)
     {
-        try
+        var img = GetViewport().GetTexture().GetImage();
+        if (maxWidth > 0 && img.GetWidth() > maxWidth)
         {
-            var img = GetViewport().GetTexture().GetImage();
-            byte[] buf = format == "png" ? img.SavePngToBuffer() : img.SaveJpgToBuffer();
-            return JsonSerializer.Serialize(new JsonObject { ["format"] = format, ["width"] = img.GetWidth(), ["height"] = img.GetHeight(), ["size_bytes"] = buf.Length, ["data"] = Convert.ToBase64String(buf) }, JsonOpts);
+            int newHeight = (int)(img.GetHeight() * (float)maxWidth / img.GetWidth());
+            img.Resize(maxWidth, newHeight, Image.Interpolation.Lanczos);
         }
-        catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
+        byte[] buf = format == "png" ? img.SavePngToBuffer() : img.SaveJpgToBuffer();
+        return new McpImageResult
+        {
+            Base64 = Convert.ToBase64String(buf),
+            MimeType = format == "png" ? "image/png" : "image/jpeg"
+        };
+    }
+
+    // ── time_scale ───────────────────────────────────────────────────────
+
+    private string TimeScale(Dictionary<string, JsonElement> args)
+    {
+        if (args.ContainsKey("scale"))
+        {
+            var s = args["scale"].GetDouble();
+            if (s < 0.1 || s > 20.0) return "{\"error\":\"scale out of range [0.1, 20]\"}";
+            Engine.TimeScale = s;
+        }
+        return $"{{\"ok\":true,\"time_scale\":{Engine.TimeScale}}}";
     }
 
     // ── metrics ──────────────────────────────────────────────────────────
@@ -329,7 +348,7 @@ public partial class GameMcpServer
         int limit = args.ContainsKey("limit") ? args["limit"].GetInt32() : 50;
         try
         {
-            var dir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "debug_logs");
+            var dir = ProjectSettings.GlobalizePath("user://mcp_logs");
             var files = System.IO.Directory.GetFiles(dir, $"{category}_*.log").OrderBy(f => f).ToList();
             if (files.Count == 0) return $"{{\"count\":0,\"entries\":[]}}";
 
@@ -355,7 +374,7 @@ public partial class GameMcpServer
     {
         try
         {
-            var dir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "debug_logs");
+            var dir = ProjectSettings.GlobalizePath("user://mcp_logs");
             if (!System.IO.Directory.Exists(dir)) return "{\"categories\":[]}";
             var files = System.IO.Directory.GetFiles(dir, "*.log");
             var groups = files.GroupBy(f => System.IO.Path.GetFileName(f).Split('_')[0]);

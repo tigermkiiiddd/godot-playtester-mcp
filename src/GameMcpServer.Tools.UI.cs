@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+
 public partial class GameMcpServer
 {
     // ── get_ui_layout (tree structure like DOM) ─────────────────────────
@@ -340,6 +341,13 @@ public partial class GameMcpServer
 
         // Move virtual cursor
         _simMousePos = new Vector2(x, y);
+
+        bool force = args.ContainsKey("force") && args["force"].GetBoolean();
+        if (control is BaseButton bb2 && !force)
+        {
+            if (bb2.Disabled) return "{\"error\":\"Button is disabled — a real player cannot click it. Pass force=true to bypass (not recommended).\"}";
+            if (!bb2.IsVisibleInTree()) return "{\"error\":\"Button is not visible — pass force=true to bypass.\"}";
+        }
 
         // For buttons, directly emit pressed signal (bypasses CanvasLayer routing issues)
         if (control is BaseButton bb)

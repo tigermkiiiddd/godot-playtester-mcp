@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+
 public partial class GameMcpServer
 {
     private void RegisterMacroTools()

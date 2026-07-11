@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 
+
 /// <summary>
 /// Fixed-capacity ring buffer. O(1) push, O(1) indexed access.
 /// Replaces List.RemoveAt(0) which is O(n).

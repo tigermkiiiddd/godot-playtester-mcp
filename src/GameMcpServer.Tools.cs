@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+
 public partial class GameMcpServer
 {
     // ═══════════════════════════════════════════════════════════════════════
@@ -16,8 +17,8 @@ public partial class GameMcpServer
     {
         // ── Scene & Info ─────────────────────────────────────────────────
 
-        Reg("get_scene_tree", "Get the complete scene tree structure.",
-            p("{}", "object"), _ => GetSceneTreeJson());
+        Reg("get_scene_tree", "Get the complete scene tree structure, recursively. Optional max_depth (default 6) bounds recursion.",
+            p("{\"max_depth\":{\"type\":\"integer\"}}", "object"), a => GetSceneTreeJson(a));
 
         Reg("get_node_properties", "Get properties of a node. Requires 'path'.",
             p("{\"path\":{\"type\":\"string\"}}", "object"), a => GetNodeProperties(a["path"].GetString()));
@@ -52,8 +53,8 @@ public partial class GameMcpServer
 
         // ── UI Control ───────────────────────────────────────────────────
 
-        Reg("click_element", "Click a UI element by name or path. Uses element's rect center.",
-            p("{\"name\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"button\":{\"type\":\"string\"},\"offset_x\":{\"type\":\"number\"},\"offset_y\":{\"type\":\"number\"}}", "object"),
+        Reg("click_element", "Click a UI element by name or path. Uses element's rect center. Disabled or invisible buttons are rejected (a real player could not click them) unless force=true.",
+            p("{\"name\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"button\":{\"type\":\"string\"},\"offset_x\":{\"type\":\"number\"},\"offset_y\":{\"type\":\"number\"},\"force\":{\"type\":\"boolean\"}}", "object"),
             a => ClickElement(a));
 
         Reg("type_text", "Input text into a UI element (LineEdit/TextEdit). Mode: set=direct, type=simulated keystrokes.",
@@ -106,11 +107,12 @@ public partial class GameMcpServer
         // ── Screenshot ───────────────────────────────────────────────────
 
         Reg("screenshot",
-            "Capture current frame as base64 image. Prefer get_game_state/get_ui_layout for structured data — use screenshot only when you need to see the visuals.",
-            p("{\"format\":{\"type\":\"string\"},\"quality\":{\"type\":\"integer\"}}", "object"),
+            "Capture current frame as an image (returned as an MCP image content block). Prefer get_game_state/get_ui_layout for structured data — use screenshot only when you need to see the visuals. max_width (default 960) downsizes oversized captures.",
+            p("{\"format\":{\"type\":\"string\"},\"quality\":{\"type\":\"integer\"},\"max_width\":{\"type\":\"integer\"}}", "object"),
             a => TakeScreenshot(
                 a.ContainsKey("format") ? a["format"].GetString() : "jpeg",
-                a.ContainsKey("quality") ? a["quality"].GetInt32() : 80));
+                a.ContainsKey("quality") ? a["quality"].GetInt32() : 80,
+                a.ContainsKey("max_width") ? a["max_width"].GetInt32() : 960));
 
         // ── Metrics ──────────────────────────────────────────────────────
 
@@ -166,6 +168,13 @@ public partial class GameMcpServer
             "Clear all AI and Debug log ring buffers.",
             p("{}", "object"),
             _ => { ClearLogs(); return "{\"ok\":true}"; });
+
+        // ── Diagnostics ──────────────────────────────────────────────────
+
+        Reg("time_scale",
+            "Get or set Engine.TimeScale (range [0.1, 20]) — fast-forward playtests for roguelike balance runs. Omit 'scale' to just read the current value.",
+            p("{\"scale\":{\"type\":\"number\"}}", "object"),
+            a => TimeScale(a));
     }
 
     // Helper for concise tool registration

@@ -9,6 +9,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 
+
 public partial class GameMcpServer
 {
     // ═══════════════════════════════════════════════════════════════════════
@@ -53,11 +54,7 @@ public partial class GameMcpServer
     private async Task HandleRequestAsync(HttpListenerContext context)
     {
         var response = context.Response;
-        response.Headers.Add("Access-Control-Allow-Origin", "*");
-        response.Headers.Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
 
-        if (context.Request.HttpMethod == "OPTIONS") { response.StatusCode = 200; response.Close(); return; }
         if (context.Request.HttpMethod != "POST")
         {
             response.StatusCode = 405;
@@ -75,6 +72,14 @@ public partial class GameMcpServer
         try { responseBody = ProcessMcpMessage(requestBody); }
         catch (Exception e) { responseBody = $"{{\"error\":\"{e.Message.Replace("\"", "'")}\"}}"; }
 
+        if (responseBody == null)
+        {
+            // Notification — no result expected. 202 with empty body per Streamable HTTP transport.
+            response.StatusCode = 202;
+            response.Close();
+            return;
+        }
+
         var bytes = Encoding.UTF8.GetBytes(responseBody);
         response.StatusCode = 200; response.ContentType = "application/json"; response.ContentLength64 = bytes.Length;
         await response.OutputStream.WriteAsync(bytes); response.Close();
@@ -84,6 +89,8 @@ public partial class GameMcpServer
     //  MCP PROTOCOL
     // ═══════════════════════════════════════════════════════════════════════
 
+    private static readonly string[] SupportedProtocolVersions = { "2024-11-05", "2025-03-26", "2025-06-18" };
+
     private string ProcessMcpMessage(string json)
     {
         var node = JsonNode.Parse(json).AsObject();
@@ -91,26 +98,29 @@ public partial class GameMcpServer
         var id = node["id"];
         var @params = node["params"]?.AsObject();
 
+        if (method.StartsWith("notifications/")) return null;
+
         string result = method switch
         {
             "initialize" => HandleInit(@params),
-            "notifications/initialized" => "",
             "tools/list" => HandleToolsList(),
             "tools/call" => HandleToolsCall(@params),
             "ping" => "{}",
             _ => RpcError(id, -32601, $"Unknown method: {method}")
         };
 
-        return method == "notifications/initialized" ? "" : RpcResult(id, result);
+        return RpcResult(id, result);
     }
 
     private string HandleInit(JsonObject p)
     {
         var name = p?["clientInfo"]?["name"]?.GetValue<string>() ?? "unknown";
         GD.Print($"[GameMcp] Client connected: {name}");
+        var requested = p?["protocolVersion"]?.GetValue<string>();
+        var negotiated = System.Linq.Enumerable.Contains(SupportedProtocolVersions, requested) ? requested : "2025-03-26";
         return JsonSerializer.Serialize(new JsonObject
         {
-            ["protocolVersion"] = "2024-11-05",
+            ["protocolVersion"] = negotiated,
             ["capabilities"] = new JsonObject { ["tools"] = new JsonObject { ["listChanged"] = false } },
             ["serverInfo"] = new JsonObject { ["name"] = ServerName, ["version"] = "2.0.0" }
         }, JsonOpts);
@@ -139,24 +149,47 @@ public partial class GameMcpServer
         if (p?["arguments"] is JsonObject ao)
             foreach (var kv in ao) args[kv.Key] = System.Text.Json.JsonSerializer.Deserialize<JsonElement>(kv.Value.ToJsonString());
 
-        if (!_handlers.TryGetValue(toolName, out var handler))
-            throw new Exception($"Unknown tool: {toolName}");
-
-        var result = ExecuteOnMainThread(handler, args);
-        return JsonSerializer.Serialize(new JsonObject
+        try
         {
-            ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = result?.ToString() ?? "null" } }
-        }, JsonOpts);
+            if (!_handlers.TryGetValue(toolName, out var handler))
+                throw new Exception($"Unknown tool: {toolName}");
+
+            var result = ExecuteOnMainThread(handler, args);
+
+            if (result is McpImageResult img)
+            {
+                return JsonSerializer.Serialize(new JsonObject
+                {
+                    ["content"] = new JsonArray { new JsonObject { ["type"] = "image", ["data"] = img.Base64, ["mimeType"] = img.MimeType } }
+                }, JsonOpts);
+            }
+
+            return JsonSerializer.Serialize(new JsonObject
+            {
+                ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = result?.ToString() ?? "null" } }
+            }, JsonOpts);
+        }
+        catch (Exception e)
+        {
+            return JsonSerializer.Serialize(new JsonObject
+            {
+                ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = $"Tool error: {e.Message}" } },
+                ["isError"] = true
+            }, JsonOpts);
+        }
     }
 
     // ── Thread Safety ───────────────────────────────────────────────────
+
+    private const int MainThreadTimeoutMs = 10000;
 
     private T ExecuteOnMainThread<T>(Func<Dictionary<string, JsonElement>, T> func, Dictionary<string, JsonElement> args)
     {
         T result = default; Exception ex = null;
         var done = new ManualResetEventSlim(false);
         _mainQueue.Enqueue(() => { try { result = func(args); } catch (Exception e) { ex = e; } finally { done.Set(); } });
-        done.Wait(10000);
+        if (!done.Wait(MainThreadTimeoutMs))
+            throw new TimeoutException($"Main-thread dispatch timed out ({MainThreadTimeoutMs / 1000}s) — game frozen or paused?");
         if (ex != null) throw ex;
         return result;
     }
