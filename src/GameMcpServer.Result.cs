@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+namespace GodotPlaytester;
 using System.Text.Json;
 
 

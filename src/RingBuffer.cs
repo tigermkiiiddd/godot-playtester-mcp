@@ -1,4 +1,5 @@
 using System;
+namespace GodotPlaytester;
 using System.Collections;
 using System.Collections.Generic;
 
