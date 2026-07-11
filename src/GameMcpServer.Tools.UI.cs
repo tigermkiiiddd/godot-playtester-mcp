@@ -351,6 +351,17 @@ public partial class GameMcpServer
             if (!bb2.IsVisibleInTree()) return "{\"error\":\"Button is not visible — pass force=true to bypass.\"}";
         }
 
+        string mode = args.ContainsKey("mode") ? args["mode"].GetString() : "virtual";
+        if (mode == "os")
+        {
+            // High-fidelity path: a real OS click at the resolved center, with true hit-testing
+            // by the actual window — it only "hits" the element if the real chain routes it there.
+            string osButton = args.ContainsKey("button") ? args["button"].GetString() : "left";
+            var osResult = OsClickMouse(osButton, "click", x, y);
+            if (osResult.StartsWith("{\"error\"")) return osResult;
+            return $"{{\"ok\":true,\"name\":\"{control.Name}\",\"x\":{x},\"y\":{y},\"mode\":\"os\"}}";
+        }
+
         // For buttons, directly emit pressed signal (bypasses CanvasLayer routing issues)
         if (control is BaseButton bb)
         {
@@ -451,8 +462,16 @@ public partial class GameMcpServer
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
     }
 
-    private string DoubleClick(string button, float x, float y)
+    private string DoubleClick(string button, float x, float y, string mode = "virtual")
     {
+        if (mode == "os")
+        {
+            // Two rapid real clicks — Windows recognizes them as a double-click by
+            // OS-level timing (GetDoubleClickTime), same as a real double-click would.
+            var first = OsClickMouse(button, "click", x, y);
+            if (first.StartsWith("{\"error\"")) return first;
+            return OsClickMouse(button, "click", x, y);
+        }
         try
         {
             _simMousePos = new Vector2(x, y);

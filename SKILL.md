@@ -344,21 +344,28 @@ Route each handler through your game's own logic layer — the same code path a 
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `click_element` | Click UI element by name or path (uses rect center). Refuses `Disabled` or not-visible buttons by default — a real player couldn't click them. `force:true` bypasses that check (and hit-testing); use sparingly. | `name`, `path`, `button`, `offset_x/y`, `force` |
+| `click_element` | Click UI element by name or path (uses rect center). Refuses `Disabled` or not-visible buttons by default — a real player couldn't click them. `force:true` bypasses that check (and hit-testing); use sparingly. `mode:"os"` performs a real click (SendInput) with true hit-testing instead of the default engine-level signal/event injection. | `name`, `path`, `button`, `offset_x/y`, `force`, `mode` (virtual/os) |
 | `type_text` | Input text into LineEdit/TextEdit (set or type mode) | `target`, `text`, `mode` (set/type) |
 | `select_option` | Select item in OptionButton/ItemList by index | `name`, `path`, `index` |
 | `get_focused_element` | Get currently focused UI Control | none |
 | `drag` | Drag from one point to another (uses macro engine) | `from_x/y`, `to_x/y`, `duration`, `button` |
-| `double_click` | Double-click at screen coordinates | `button`, `x`, `y` |
+| `double_click` | Double-click at screen coordinates | `button`, `x`, `y`, `mode` (virtual/os) |
 | `hover` | Move mouse to position | `x`, `y` |
 
 ### Input Control
 
+Two input channels for the mouse tools below, selected via `mode`:
+
+| mode | How | Trade-off |
+|------|-----|-----------|
+| `virtual` (default) | Injects `InputEventMouse*` straight into the engine (`Input.ParseInputEvent`) | Fast, headless-ok — but bypasses the real OS→window→engine chain, so it can't catch (or reproduce) focus/occlusion/`mouse_filter`/DPI bugs |
+| `os` | Drives the real system cursor via Win32 `SendInput`/`SetCursorPos` | True input chain, catches those bugs — requires a visible+focused window, Windows-only, occupies the physical mouse during the test; `move_mouse` ignores `duration` in this mode |
+
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `press_key` | Raw keyboard key (W, Space, Escape, etc) | `key`, `action` (press/release) |
-| `click_mouse` | Mouse button at screen coords | `button` (left/right/middle), `action`, `x`, `y` |
-| `move_mouse` | Move mouse cursor. Without `duration`: instant teleport. With `duration`: smooth animated move. | `x`, `y`, `duration` |
+| `click_mouse` | Mouse button at screen coords | `button` (left/right/middle), `action`, `x`, `y`, `mode` (virtual/os) |
+| `move_mouse` | Move mouse cursor. Without `duration`: instant teleport. With `duration`: smooth animated move (virtual mode only). | `x`, `y`, `duration`, `mode` (virtual/os) |
 | `scroll_mouse` | Mouse wheel | `amount` (int) |
 | `simulate_input` | Mapped action (ui_up, ui_accept) | `action`, `key` |
 

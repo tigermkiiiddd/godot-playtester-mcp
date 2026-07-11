@@ -67,8 +67,9 @@ public partial class GameMcpServer
 
     // ── click_mouse ──────────────────────────────────────────────────────
 
-    private string ClickMouse(string button, string action, float x, float y)
+    private string ClickMouse(string button, string action, float x, float y, string mode = "virtual")
     {
+        if (mode == "os") return OsClickMouse(button, action, x, y);
         try
         {
             _simMousePos = new Vector2(x, y);
@@ -89,6 +90,9 @@ public partial class GameMcpServer
     {
         float x = args["x"].GetSingle();
         float y = args["y"].GetSingle();
+        string mode = args.ContainsKey("mode") ? args["mode"].GetString() : "virtual";
+
+        if (mode == "os") return OsMoveMouse(x, y); // duration smooth-move is a virtual-mode-only feature (v1)
 
         // If duration provided, use macro for smooth move
         if (args.ContainsKey("duration") && args["duration"].GetSingle() > 0)
