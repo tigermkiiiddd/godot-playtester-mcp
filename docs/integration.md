@@ -132,119 +132,43 @@ private void RegisterMcpMetrics()
 }
 ```
 
-## Step 7: Dual-Pipeline Input — Physical Mouse + MCP Virtual Mouse
+## Step 7: Choose a Virtual Pointer Integration
 
-**This step is OPTIONAL.** The MCP virtual mouse already emits both touch and mouse events at the OS-event level, so most games need no special handling. Only follow this pattern if your game unifies physical and virtual pointer input into a single custom field/pipeline.
+**This step is OPTIONAL.** The built-in pointer tools send mouse events through `Viewport.PushInput`, so standard Godot `Control` nodes and gameplay code that handles mouse events normally need no adapter. They do not emit a second touch-event stream and they do not enter through the operating system.
 
-### The Core Problem
-
-Godot has two completely independent event pipelines:
-- **Mouse events**: `InputEventMouseMotion`, `InputEventMouseButton`
-- **Touch events**: `InputEventScreenDrag`, `InputEventScreenTouch`
-
-HUD Controls with `mouse_filter="Stop"` **consume mouse events** in the GUI processing phase, preventing them from reaching `_UnhandledInput`. But touch events pass through Controls unimpeded.
-
-### Architecture: Unified `_mouseWorldPos` via Dual Pipeline
-
-Both input sources write to a single `_mouseWorldPos` field. All consumers (preview, click handling) read only this field.
-
-```
-Physical mouse motion  → InputEventMouseMotion  → _Input → _mouseWorldPos = GetGlobalMousePosition()
-Virtual mouse motion   → InputEventScreenDrag   → _Input → _mouseWorldPos = ScreenToWorld(pos)
-Physical mouse click   → InputEventMouseButton  → _Input → HandleClick(_mouseWorldPos)
-Virtual mouse click    → InputEventScreenTouch  → _Input → HandleClick(_mouseWorldPos)
-```
-
-**Why `_Input` instead of `_UnhandledInput`?** Controls with `MouseFilter.Stop` consume `InputEventMouseButton` before `_UnhandledInput`. `_Input` fires BEFORE GUI processing, so it always receives events.
-
-### Game Code Pattern
+Use the normal event path first:
 
 ```csharp
-private Vector2 _mouseWorldPos;
-
 public override void _Input(InputEvent @event)
 {
-    if (CurrentPhase == GamePhase.Title || CurrentPhase == GamePhase.Settlement)
-        return;
-
-    // Physical mouse movement
-    if (@event is InputEventMouseMotion)
-    {
-        _mouseWorldPos = GetGlobalMousePosition();
-    }
-    // MCP virtual mouse movement (touch drag, NOT blocked by HUD Controls)
-    else if (@event is InputEventScreenDrag drag)
-    {
-        _mouseWorldPos = ScreenToWorld(drag.Position);
-    }
-    // MCP virtual mouse click (touch event)
-    else if (@event is InputEventScreenTouch touch && touch.Pressed && touch.Index == 0)
-    {
-        _mouseWorldPos = ScreenToWorld(touch.Position);
-        HandleClick(_mouseWorldPos);
-    }
-    // Physical mouse click (must be in _Input, not _UnhandledInput!)
-    else if (@event is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left && mb.Pressed)
-    {
-        HandleClick(_mouseWorldPos);
-    }
-}
-
-private Vector2 ScreenToWorld(Vector2 screenPos)
-{
-    var cam = GetNodeOrNull<Camera2D>("Camera2D");
-    Vector2 camPos = cam != null ? cam.Position : Vector2.Zero;
-    Vector2 zoom = cam != null ? cam.Zoom : new Vector2(22f, 22f);
-    Vector2 vpSize = GetViewport().GetVisibleRect().Size;
-    return (screenPos - vpSize / 2f) / zoom + camPos;
-}
-
-private void HandleClick(Vector2 mouseWorld)
-{
-    if (CurrentPhase == GamePhase.Combat || _timeScaler.IsPaused) return;
-    // ... unified click logic: place tower, select object, etc.
+    if (@event is InputEventMouseMotion motion)
+        UpdatePointerPreview(motion.Position);
+    else if (@event is InputEventMouseButton button &&
+             button.ButtonIndex == MouseButton.Left && button.Pressed)
+        HandlePointerAction(button.Position);
 }
 ```
 
-### MCP Tools.Input: Send Both Touch + Mouse Events
-
-The MCP server must send touch events (for game logic) AND mouse events (for HUD button compatibility):
+If the game deliberately polls a custom input abstraction instead of consuming Godot mouse events, read the playtester through `IInputProvider` in `_Process`. This keeps physical and automated input behind one game-owned contract without inventing touch events:
 
 ```csharp
-// MoveMouse: touch drag (game logic) + mouse motion (HUD cursor update)
-private string MoveMouse(float x, float y)
+private IInputProvider _testInput;
+
+public override void _Ready()
 {
-    _simMousePos = new Vector2(x, y);
-    Input.ParseInputEvent(new InputEventScreenDrag { Position = new Vector2(x, y), Index = 0 });
-    Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) });
-    return $"{{\"ok\":true,\"x\":{x},\"y\":{y}}}";
+    _testInput = GameMcpServer.Instance;
 }
 
-// ClickMouse: touch press (game logic) + mouse button (UI button compat)
-private string ClickMouse(string button, string action, float x, float y)
+public override void _Process(double delta)
 {
-    _simMousePos = new Vector2(x, y);
-    bool pressed = action == "press";
-    Input.ParseInputEvent(new InputEventScreenTouch { Pressed = pressed, Position = new Vector2(x, y), Index = 0 });
-    var btnIdx = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left };
-    Input.ParseInputEvent(new InputEventMouseButton { Pressed = pressed, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btnIdx });
-    if (btnIdx == MouseButton.Left) _simMouseLeftDown = pressed;
-    else if (btnIdx == MouseButton.Right) _simMouseRightDown = pressed;
-    return $"{{\"ok\":true,\"button\":\"{button}\",\"x\":{x},\"y\":{y}}}";
+    if (_testInput == null) return;
+    UpdatePointerPreview(_testInput.MousePosition);
+    if (_testInput.MouseLeftJustPressed)
+        HandlePointerAction(_testInput.MousePosition);
 }
 ```
 
-### Key Design Decisions
-
-1. **Touch events as virtual mouse channel**: `InputEventScreenTouch`/`InputEventScreenDrag` are NOT consumed by `mouse_filter="Stop"` Controls. This is the key advantage — virtual input reaches `_Input` regardless of HUD layout.
-
-2. **Dual events for compatibility**: MCP sends both touch AND mouse events. Touch events drive game logic (placement, selection). Mouse events ensure `click_element` (via `EmitSignal`) and HUD buttons still work.
-
-3. **No `_Process` polling needed**: All input is handled in `_Input` via Godot's native event pipeline. No need for `PollMcpMouse()` or frame-level polling.
-
-4. **Coordinate conversion difference**: Physical mouse uses `GetGlobalMousePosition()` (already in world coords via Camera2D). Touch events only have screen coords and need manual `ScreenToWorld()` conversion.
-
-5. **Phase guard in `_Input`**: Always check game phase at the top of `_Input` to avoid NullReferenceException when objects are being cleaned up.
+Keep evidence boundaries explicit: viewport injection can verify Godot-side event and GUI routing, while `mode="os"` is required for claims about window focus, operating-system occlusion, or DPI coordinate mapping. `click_element(force=true)` emits a signal directly and is only a diagnostic bypass.
 
 ## Step 8: Drag-and-Drop (Physical Mouse Priority)
 

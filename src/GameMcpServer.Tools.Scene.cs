@@ -111,6 +111,10 @@ public partial class GameMcpServer
     private string GetGameInfo()
     {
         var tree = GetTree();
+        ulong now = Time.GetTicksMsec();
+        double uptimeSeconds = _sessionStartedMsec > 0 && now >= _sessionStartedMsec
+            ? (now - _sessionStartedMsec) / 1000.0
+            : 0;
         return JsonSerializer.Serialize(new Dictionary<string, object>
         {
             ["engine_version"] = Engine.GetVersionInfo()["string"].Obj?.ToString() ?? Engine.GetVersionInfo()["string"].ToString(),
@@ -118,6 +122,8 @@ public partial class GameMcpServer
             ["window_size"] = $"{DisplayServer.WindowGetSize().X}x{DisplayServer.WindowGetSize().Y}",
             ["current_scene"] = tree?.CurrentScene?.SceneFilePath ?? "unknown",
             ["server_name"] = ServerName,
+            ["session_id"] = _sessionId ?? "not-started",
+            ["uptime"] = Math.Round(uptimeSeconds, 3),
             ["tools_count"] = _tools.Count,
             ["metrics_count"] = _metrics.Count,
         }, JsonOpts);

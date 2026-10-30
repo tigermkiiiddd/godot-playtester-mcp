@@ -129,8 +129,8 @@ public partial class GameMcpServer
 
     /// <summary>
     /// Move the real OS cursor to a window-local point, then drive a real mouse button via
-    /// SendInput. 'action' is "press" (down only), "release" (up only), or anything else
-    /// (default "click") for a full press+release. Windows-only — returns a structured
+    /// SendInput. 'action' is "press" (down only), "release" (up only), or "click"
+    /// for a full press+release. Callers validate the action and button first. Windows-only — returns a structured
     /// error on other platforms since there is no SendInput equivalent to fall back to.
     /// </summary>
     private string OsClickMouse(string button, string action, float x, float y)
@@ -150,15 +150,22 @@ public partial class GameMcpServer
         {
             case "press":
                 SendMouseButtonInput(downFlag);
-                if (btn == "left") _simMouseLeftDown = true; else if (btn == "right") _simMouseRightDown = true;
+                if (btn == "left") _simMouseLeftDown = true;
+                else if (btn == "right") _simMouseRightDown = true;
+                else if (btn == "middle") _simMouseMiddleDown = true;
                 break;
             case "release":
                 SendMouseButtonInput(upFlag);
-                if (btn == "left") _simMouseLeftDown = false; else if (btn == "right") _simMouseRightDown = false;
+                if (btn == "left") _simMouseLeftDown = false;
+                else if (btn == "right") _simMouseRightDown = false;
+                else if (btn == "middle") _simMouseMiddleDown = false;
                 break;
-            default: // "click" — full press + release
+            case "click":
                 SendMouseButtonInput(downFlag);
                 SendMouseButtonInput(upFlag);
+                if (btn == "left") _simMouseLeftDown = false;
+                else if (btn == "right") _simMouseRightDown = false;
+                else if (btn == "middle") _simMouseMiddleDown = false;
                 break;
         }
 

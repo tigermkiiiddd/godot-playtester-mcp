@@ -40,6 +40,13 @@ public partial class GameMcpServer
         var tree = GetTree();
         if (tree?.Root == null) return "{\"error\":\"No scene tree\"}";
 
+        // Report the server's main viewport at the top level. Individual controls are
+        // classified against their own viewport and any clipping ancestors below.
+        var viewportRect = GetViewport().GetVisibleRect();
+        float vw = viewportRect.Size.X > 0 ? viewportRect.Size.X : DisplayServer.WindowGetSize().X;
+        float vh = viewportRect.Size.Y > 0 ? viewportRect.Size.Y : DisplayServer.WindowGetSize().Y;
+
+        var warnings = new JsonArray();
         var roots = new JsonArray();
 
         if (!string.IsNullOrEmpty(path))
@@ -47,7 +54,7 @@ public partial class GameMcpServer
             // Local view: only inspect subtree at given path
             var target = GetNodeOrNull(path);
             if (target == null) return $"{{\"error\":\"Node not found: {path}\"}}";
-            var sub = BuildUITreeNode(target, visOnly, types, 0, maxDepth, taggedOnly, fullDetail);
+            var sub = BuildUITreeNode(target, visOnly, types, 0, maxDepth, taggedOnly, fullDetail, warnings);
             if (sub != null) roots.Add(sub);
         }
         else
@@ -56,14 +63,21 @@ public partial class GameMcpServer
             foreach (var child in tree.Root.GetChildren())
             {
                 if (child == this) continue;
-                var sub = BuildUITreeNode(child, visOnly, types, 0, maxDepth, taggedOnly, fullDetail);
+                var sub = BuildUITreeNode(child, visOnly, types, 0, maxDepth, taggedOnly, fullDetail, warnings);
                 if (sub != null) roots.Add(sub);
             }
         }
-        return JsonSerializer.Serialize(new JsonObject { ["roots"] = roots }, JsonOpts);
+
+        var result = new JsonObject
+        {
+            ["viewport"] = new JsonArray { Math.Round(vw, 0), Math.Round(vh, 0) },
+            ["roots"] = roots
+        };
+        if (warnings.Count > 0) result["warnings"] = warnings;
+        return JsonSerializer.Serialize(result, JsonOpts);
     }
 
-    private JsonNode BuildUITreeNode(Node node, bool visOnly, string[] types, int depth, int maxDepth, bool taggedOnly, bool fullDetail)
+    private JsonNode BuildUITreeNode(Node node, bool visOnly, string[] types, int depth, int maxDepth, bool taggedOnly, bool fullDetail, JsonArray warnings)
     {
         if (node == null || node == this) return null;
         if (depth > maxDepth) return null;
@@ -73,7 +87,7 @@ public partial class GameMcpServer
             // Always skip mcp_ignore group
             if (c.IsInGroup("mcp_ignore")) return null;
 
-            if (visOnly && !c.Visible) return null;
+            if (visOnly && !c.IsVisibleInTree()) return null;
             if (types != null && !types.Any(t => node.GetType().Name.Contains(t.Trim(), StringComparison.OrdinalIgnoreCase))) return null;
 
             // Tagged-only mode: if control is not interesting, pass through children instead
@@ -86,7 +100,7 @@ public partial class GameMcpServer
                 var passChildren = new List<JsonNode>();
                 foreach (var ch in c.GetChildren())
                 {
-                    var childNode = BuildUITreeNode(ch, visOnly, types, depth, maxDepth, taggedOnly, fullDetail);
+                    var childNode = BuildUITreeNode(ch, visOnly, types, depth, maxDepth, taggedOnly, fullDetail, warnings);
                     if (childNode != null) passChildren.Add(childNode);
                 }
                 if (passChildren.Count == 1) return passChildren[0];
@@ -104,12 +118,37 @@ public partial class GameMcpServer
                 ["type"] = node.GetType().Name,
                 ["name"] = c.Name.ToString(),
                 ["path"] = c.GetPath().ToString(),
-                ["visible"] = c.Visible,
+                ["visible"] = c.IsVisibleInTree(),
                 ["depth"] = depth
             };
             var r = c.GetGlobalRect();
             e["rect"] = new JsonArray { Math.Round(r.Position.X, 0), Math.Round(r.Position.Y, 0), Math.Round(r.Size.X, 0), Math.Round(r.Size.Y, 0) };
             e["center"] = new JsonArray { Math.Round(r.Position.X + r.Size.X / 2, 0), Math.Round(r.Position.Y + r.Size.Y / 2, 0) };
+
+            // A geometry clue, not a verdict: compare in the control's own viewport and
+            // narrow the bounds through clipping ancestors. Scroll content is expected to
+            // move beyond its clip frame, so it stays inline but is suppressed from warnings.
+            var visibleBounds = GetEffectiveVisibleBounds(c, out var clipSource, out var insideScrollContainer);
+            var overflow = ClassifyRectVsBounds(r, visibleBounds);
+            if (overflow != null)
+            {
+                overflow["reference"] = clipSource;
+                e["offscreen"] = overflow;
+                if (IsInterestingControl(c) && !insideScrollContainer)
+                {
+                    warnings.Add(new JsonObject
+                    {
+                        ["path"] = c.GetPath().ToString(),
+                        ["name"] = c.Name.ToString(),
+                        // JsonObject nodes are single-parent — read the scalar type string,
+                        // don't re-reference the same overflow object that's now under e["offscreen"].
+                        ["type"] = overflow["type"]?.ToString(),
+                        ["rect"] = e["rect"].DeepClone(),
+                        ["reference"] = clipSource,
+                        ["severity"] = "diagnostic_hint"
+                    });
+                }
+            }
 
             // Focus
             e["focused"] = c.HasFocus();
@@ -183,7 +222,7 @@ public partial class GameMcpServer
                 int childCount = 0;
                 foreach (var ch in c.GetChildren())
                 {
-                    var childNode = BuildUITreeNode(ch, visOnly, types, depth + 1, maxDepth, taggedOnly, fullDetail);
+                    var childNode = BuildUITreeNode(ch, visOnly, types, depth + 1, maxDepth, taggedOnly, fullDetail, warnings);
                     if (childNode != null) { childArr.Add(childNode); childCount++; }
                 }
                 e["children_count"] = childCount;
@@ -198,7 +237,7 @@ public partial class GameMcpServer
             var childNodes = new List<JsonNode>();
             foreach (var ch in node.GetChildren())
             {
-                var childNode = BuildUITreeNode(ch, visOnly, types, depth, maxDepth, taggedOnly, fullDetail);
+                var childNode = BuildUITreeNode(ch, visOnly, types, depth, maxDepth, taggedOnly, fullDetail, warnings);
                 if (childNode != null) childNodes.Add(childNode);
             }
             // Merge if only one child (skip non-UI intermediate nodes)
@@ -328,6 +367,80 @@ public partial class GameMcpServer
         }
     }
 
+    /// <summary>
+    /// Classify a control's global rect against effective visible bounds.
+    /// Returns null if fully inside, otherwise one of:
+    ///   "offscreen"  — rect lies entirely outside the viewport (not visible at all)
+    ///   "clipped"    — rect partially exceeds an edge (part visible, part cut off)
+    /// The returned object also carries which edges overflow and the pixel amounts,
+    /// so callers can tell e.g. a label overflowing the bottom edge from one pushed
+    /// off the left side entirely.
+    /// </summary>
+    private JsonObject ClassifyRectVsBounds(Rect2 r, Rect2 bounds)
+    {
+        float left = r.Position.X, top = r.Position.Y;
+        float right = r.Position.X + r.Size.X, bottom = r.Position.Y + r.Size.Y;
+        float boundLeft = bounds.Position.X, boundTop = bounds.Position.Y;
+        float boundRight = bounds.Position.X + bounds.Size.X;
+        float boundBottom = bounds.Position.Y + bounds.Size.Y;
+
+        // Amount (px) each edge exceeds the viewport; >0 means it overflows.
+        float overLeft = boundLeft - left;
+        float overTop = boundTop - top;
+        float overRight = right - boundRight;
+        float overBottom = bottom - boundBottom;
+
+        bool overflowsLeft = overLeft > 0.5f;
+        bool overflowsTop = overTop > 0.5f;
+        bool overflowsRight = overRight > 0.5f;
+        bool overflowsBottom = overBottom > 0.5f;
+
+        if (!overflowsLeft && !overflowsTop && !overflowsRight && !overflowsBottom) return null;
+
+        // "offscreen" = no overlap at all (entirely beyond one edge)
+        bool entirelyOutside =
+            (right <= boundLeft) || (bottom <= boundTop) ||
+            (left >= boundRight) || (top >= boundBottom);
+
+        var o = new JsonObject { ["type"] = entirelyOutside ? "offscreen" : "clipped" };
+        if (overflowsLeft) o["overflow_left"] = (float)Math.Round(overLeft, 0);
+        if (overflowsTop) o["overflow_top"] = (float)Math.Round(overTop, 0);
+        if (overflowsRight) o["overflow_right"] = (float)Math.Round(overRight, 0);
+        if (overflowsBottom) o["overflow_bottom"] = (float)Math.Round(overBottom, 0);
+        return o;
+    }
+
+    private Rect2 GetEffectiveVisibleBounds(Control control, out string source, out bool insideScrollContainer)
+    {
+        var viewport = control.GetViewport();
+        var bounds = viewport?.GetVisibleRect() ?? new Rect2(Vector2.Zero, DisplayServer.WindowGetSize());
+        if (bounds.Size.X <= 0 || bounds.Size.Y <= 0)
+            bounds = new Rect2(Vector2.Zero, DisplayServer.WindowGetSize());
+
+        source = "viewport";
+        insideScrollContainer = false;
+        for (Node ancestor = control.GetParent(); ancestor != null && ancestor != viewport; ancestor = ancestor.GetParent())
+        {
+            if (ancestor is not Control parentControl) continue;
+            bool isScroll = parentControl is ScrollContainer;
+            if (!parentControl.ClipContents && !isScroll) continue;
+
+            insideScrollContainer |= isScroll;
+            source = isScroll ? "scroll_clip" : "parent_clip";
+            bounds = IntersectRects(bounds, parentControl.GetGlobalRect());
+        }
+        return bounds;
+    }
+
+    private static Rect2 IntersectRects(Rect2 a, Rect2 b)
+    {
+        float left = Math.Max(a.Position.X, b.Position.X);
+        float top = Math.Max(a.Position.Y, b.Position.Y);
+        float right = Math.Min(a.Position.X + a.Size.X, b.Position.X + b.Size.X);
+        float bottom = Math.Min(a.Position.Y + a.Size.Y, b.Position.Y + b.Size.Y);
+        return new Rect2(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top));
+    }
+
     // ── UI Control Tools ─────────────────────────────────────────────────
 
     private string ClickElement(Dictionary<string, JsonElement> args)
@@ -341,8 +454,12 @@ public partial class GameMcpServer
         float x = (float)Math.Round(rect.Position.X + rect.Size.X / 2 + ox, 0);
         float y = (float)Math.Round(rect.Position.Y + rect.Size.Y / 2 + oy, 0);
 
-        // Move virtual cursor
-        _simMousePos = new Vector2(x, y);
+        string mode = args.ContainsKey("mode") ? args["mode"].GetString() : "virtual";
+        if (mode != "virtual" && mode != "os")
+            return $"{{\"error\":\"Unsupported mouse mode: {mode}. Use virtual or os.\"}}";
+        string button = args.ContainsKey("button") ? args["button"].GetString() : "left";
+        if (!TryParseMouseButton(button, out var btnIdx))
+            return $"{{\"error\":\"Unsupported mouse button: {button}. Use left, right, or middle.\"}}";
 
         bool force = args.ContainsKey("force") && args["force"].GetBoolean();
         if (control is BaseButton bb2 && !force)
@@ -351,32 +468,27 @@ public partial class GameMcpServer
             if (!bb2.IsVisibleInTree()) return "{\"error\":\"Button is not visible — pass force=true to bypass.\"}";
         }
 
-        string mode = args.ContainsKey("mode") ? args["mode"].GetString() : "virtual";
         if (mode == "os")
         {
-            // High-fidelity path: a real OS click at the resolved center, with true hit-testing
-            // by the actual window — it only "hits" the element if the real chain routes it there.
-            string osButton = args.ContainsKey("button") ? args["button"].GetString() : "left";
-            var osResult = OsClickMouse(osButton, "click", x, y);
+            if (force && control is BaseButton forcedButton && (forcedButton.Disabled || !forcedButton.IsVisibleInTree()))
+                return "{\"error\":\"force=true can bypass disabled/hidden buttons only in virtual signal mode; OS input cannot force a real hit.\"}";
+            var osResult = OsClickMouse(button, "click", x, y);
             if (osResult.StartsWith("{\"error\"")) return osResult;
-            return $"{{\"ok\":true,\"name\":\"{control.Name}\",\"x\":{x},\"y\":{y},\"mode\":\"os\"}}";
+            return $"{{\"ok\":true,\"name\":\"{control.Name}\",\"x\":{x},\"y\":{y},\"mode\":\"os\",\"delivery\":\"os\",\"force_requested\":{force.ToString().ToLowerInvariant()},\"force_effective\":false}}";
         }
 
-        // For buttons, directly emit pressed signal (bypasses CanvasLayer routing issues)
-        if (control is BaseButton bb)
+        if (force && control is BaseButton bb)
         {
             bb.EmitSignal(BaseButton.SignalName.Pressed);
-        }
-        else
-        {
-            // Non-button: try Input.ParseInputEvent (works for controls not on CanvasLayer)
-            string button = args.ContainsKey("button") ? args["button"].GetString() : "left";
-            var btnIdx = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left };
-            Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btnIdx });
-            Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btnIdx });
+            _simMousePos = new Vector2(x, y);
+            return $"{{\"ok\":true,\"name\":\"{control.Name}\",\"x\":{x},\"y\":{y},\"mode\":\"virtual\",\"delivery\":\"signal\",\"force_requested\":true,\"force_effective\":true}}";
         }
 
-        return $"{{\"ok\":true,\"name\":\"{control.Name}\",\"x\":{x},\"y\":{y}}}";
+        var pos = new Vector2(x, y);
+        var targetViewport = control.GetViewport();
+        PushVirtualMouseButton(btnIdx, true, pos, viewport: targetViewport);
+        PushVirtualMouseButton(btnIdx, false, pos, viewport: targetViewport);
+        return $"{{\"ok\":true,\"name\":\"{control.Name}\",\"x\":{x},\"y\":{y},\"mode\":\"virtual\",\"delivery\":\"viewport\",\"force_requested\":{force.ToString().ToLowerInvariant()},\"force_effective\":false}}";
     }
 
     private string TypeText(Dictionary<string, JsonElement> args)
@@ -455,15 +567,18 @@ public partial class GameMcpServer
     {
         try
         {
-            _simMousePos = new Vector2(x, y);
-            Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) });
-            return $"{{\"ok\":true,\"x\":{x},\"y\":{y}}}";
+            PushVirtualMouseMotion(new Vector2(x, y));
+            return $"{{\"ok\":true,\"x\":{x},\"y\":{y},\"mode\":\"virtual\",\"delivery\":\"viewport\"}}";
         }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
     }
 
     private string DoubleClick(string button, float x, float y, string mode = "virtual")
     {
+        if (!TryParseMouseButton(button, out var btn))
+            return $"{{\"error\":\"Unsupported mouse button: {button}. Use left, right, or middle.\"}}";
+        if (mode != "virtual" && mode != "os")
+            return $"{{\"error\":\"Unsupported mouse mode: {mode}. Use virtual or os.\"}}";
         if (mode == "os")
         {
             // Two rapid real clicks — Windows recognizes them as a double-click by
@@ -474,14 +589,13 @@ public partial class GameMcpServer
         }
         try
         {
-            _simMousePos = new Vector2(x, y);
-            var btn = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left };
+            var pos = new Vector2(x, y);
             for (int i = 0; i < 2; i++)
             {
-                Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btn, DoubleClick = i == 1 });
-                Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btn });
+                PushVirtualMouseButton(btn, true, pos, doubleClick: i == 1);
+                PushVirtualMouseButton(btn, false, pos);
             }
-            return $"{{\"ok\":true,\"button\":\"{button}\",\"x\":{x},\"y\":{y}}}";
+            return $"{{\"ok\":true,\"button\":\"{button}\",\"x\":{x},\"y\":{y},\"mode\":\"virtual\",\"delivery\":\"viewport\"}}";
         }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
     }
@@ -494,6 +608,8 @@ public partial class GameMcpServer
         float toY = args["to_y"].GetSingle();
         float duration = args.ContainsKey("duration") ? args["duration"].GetSingle() : 0.3f;
         string button = args.ContainsKey("button") ? args["button"].GetString() : "left";
+        if (!TryParseMouseButton(button, out _))
+            return $"{{\"error\":\"Unsupported mouse button: {button}. Use left, right, or middle.\"}}";
 
         // Use macro system for frame-by-frame drag
         var id = $"macro_{++_macroCounter:D3}";

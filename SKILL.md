@@ -1,10 +1,11 @@
 ---
-name: godot-play-tester
+name: godot-playtester-mcp
 description: |
   Deploy a runtime MCP server into a running Godot 4 (.NET) game for AI-driven playtesting and automated QA.
   Use when the user wants to: test a Godot game, playtest gameplay, run automated game tests, balance test,
   simulate player input, capture game screenshots, monitor game metrics, verify game behavior,
   remote-control a running Godot game, or do closed-loop game testing.
+  When used inside game-dev-pipeline, act as an execution backend for gd-playtest-report and return its evidence contract; do not issue the pipeline verdict yourself.
   Includes a three-phase testing workflow with MANDATORY boundary/edge case testing: Prep (write test cases including cancel/backward/state-recovery scenarios) → Execute (happy path + boundary cases, one at a time with log verification) → Report (evidence-based summary).
 ---
 
@@ -107,7 +108,7 @@ Name all UI Control nodes descriptively. MCP extracts type, text, value, and rec
 
 ### Button Callback Convention (Defense in Depth)
 
-By default `click_element` refuses to click a `Disabled` or not-visible button (a real player couldn't click it either) — see Pitfalls. Passing `force:true` bypasses that check, and also skips hit-testing, so it should be used sparingly (e.g. deliberately confirming a disabled button truly does nothing when triggered).
+By default `click_element` uses the target viewport's GUI picking and refuses a `Disabled` or not-visible button. Passing `force:true` on a button emits its signal directly, bypassing hit-testing and player reachability; use it only as an explicitly recorded diagnostic intervention.
 
 Because `force` exists, button callbacks should still guard their own preconditions defensively:
 
@@ -119,7 +120,7 @@ healBtn.Pressed += () => {
 };
 ```
 
-**Principle**: MCP operates at the signal level, it does not replicate UI state checks. Game code owns its own state guards.
+**Principle**: normal virtual clicks exercise Godot viewport hit-testing; `force:true` is a signal-level bypass. Game code still owns its state guards, and a forced result is not evidence that a player can reach the control.
 
 ### get_ui_layout Whitelist Rules
 
@@ -184,9 +185,9 @@ Note: Node `Name` is ASCII (`Cell_0_0`), but `mcp_data` values can be any langua
 
 ### Virtual Mouse Input
 
-The MCP virtual mouse (`click_mouse`, `move_mouse`, `drag`, and macro `click`/`drag` steps) emits both touch events (`InputEventScreenTouch`/`InputEventScreenDrag`) and mouse events (`InputEventMouseButton`/`InputEventMouseMotion`) at the OS-event level, so most games need no special handling — it looks like ordinary input to both UI Controls and gameplay code.
+The MCP virtual mouse (`click_mouse`, `move_mouse`, `drag`, and macro pointer steps) sends `InputEventMouseButton`/`InputEventMouseMotion` through `Viewport.PushInput`. This exercises Godot's viewport GUI routing and works headlessly, but it does not prove OS focus, window occlusion, DPI mapping, or physical-device behavior. Use `mode="os"` on Windows when those properties are part of the claim.
 
-If your game unifies physical and virtual pointer input into a single custom pipeline (e.g. one field read by both click-to-move and drag-select logic), see `docs/integration.md` for that (optional) pattern.
+For custom gameplay input that intentionally does not consume viewport mouse events, use the exposed `IInputProvider` polling pattern in `docs/integration.md`; do not assume a second touch-event channel exists.
 
 ### Metric Registration Convention
 
@@ -580,6 +581,12 @@ See **docs/debugging.md** for full diagnosis table and detailed fixes.
 ## Playtest Template
 
 See **docs/testing.md** for the full three-phase playtest process (Prep → Execute → Report).
+
+### Game Dev Pipeline handoff
+
+When `gd-playtest-report` selects this MCP as its backend, this skill executes the run and returns evidence; `gd-playtest-report` owns PT/GATE interpretation and the final verdict. Record the build result, fresh `session_id` and `uptime`, PRD/integration source, ordered actions and observations, per-path result, input mode (`virtual`/`os`/mixed), and every use of `force`, direct state mutation, retry, or human intervention.
+
+Evidence strength follows the delivery path: OS input can support real window-chain claims; viewport input supports Godot engine/GUI-routing claims but not OS focus/occlusion/DPI claims; `force`, direct signal emission, and node mutation are diagnostic bypasses and cannot prove player operability. An AI-driven run is automated execution evidence, not an independent target-player playtest.
 
 **Key rules:**
 1. Write test cases BEFORE operating (`log` intent) — **IRON LAW, no exceptions**

@@ -69,19 +69,106 @@ public partial class GameMcpServer
 
     private string ClickMouse(string button, string action, float x, float y, string mode = "virtual")
     {
+        if (!TryParseMouseButton(button, out var btnIdx))
+            return $"{{\"error\":\"Unsupported mouse button: {button}. Use left, right, or middle.\"}}";
+        if (action != "press" && action != "release" && action != "click")
+            return $"{{\"error\":\"Unsupported mouse action: {action}. Use press, release, or click.\"}}";
+        if (mode != "virtual" && mode != "os")
+            return $"{{\"error\":\"Unsupported mouse mode: {mode}. Use virtual or os.\"}}";
+
         if (mode == "os") return OsClickMouse(button, action, x, y);
         try
         {
-            _simMousePos = new Vector2(x, y);
-            var btnIdx = button.ToLowerInvariant() switch { "right" => MouseButton.Right, "middle" => MouseButton.Middle, _ => MouseButton.Left };
-            bool pressed = action == "press";
-            Input.ParseInputEvent(new InputEventMouseButton { Pressed = pressed, Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y), ButtonIndex = btnIdx });
-            // Track simulated button state
-            if (btnIdx == MouseButton.Left) _simMouseLeftDown = pressed;
-            else if (btnIdx == MouseButton.Right) _simMouseRightDown = pressed;
-            return $"{{\"ok\":true,\"button\":\"{button}\",\"x\":{x},\"y\":{y}}}";
+            var pos = new Vector2(x, y);
+            switch (action)
+            {
+                case "press":
+                    PushVirtualMouseButton(btnIdx, true, pos);
+                    break;
+                case "release":
+                    PushVirtualMouseButton(btnIdx, false, pos);
+                    break;
+                case "click":
+                    PushVirtualMouseButton(btnIdx, true, pos);
+                    PushVirtualMouseButton(btnIdx, false, pos);
+                    break;
+            }
+            return $"{{\"ok\":true,\"button\":\"{button}\",\"action\":\"{action}\",\"x\":{x},\"y\":{y},\"mode\":\"virtual\",\"delivery\":\"viewport\"}}";
         }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
+    }
+
+    // ── Shared virtual pointer delivery ──────────────────────────────────
+
+    private static bool TryParseMouseButton(string button, out MouseButton result)
+    {
+        result = button?.ToLowerInvariant() switch
+        {
+            "left" => MouseButton.Left,
+            "right" => MouseButton.Right,
+            "middle" => MouseButton.Middle,
+            _ => MouseButton.None
+        };
+        return result != MouseButton.None;
+    }
+
+    private MouseButtonMask CurrentSimulatedButtonMask()
+    {
+        var mask = (MouseButtonMask)0;
+        if (_simMouseLeftDown) mask |= MouseButtonMask.Left;
+        if (_simMouseRightDown) mask |= MouseButtonMask.Right;
+        if (_simMouseMiddleDown) mask |= MouseButtonMask.Middle;
+        return mask;
+    }
+
+    private void PushVirtualMouseMotion(Vector2 pos, Viewport viewport = null)
+    {
+        _simMousePos = pos;
+        var ev = new InputEventMouseMotion
+        {
+            Position = pos,
+            GlobalPosition = pos,
+            ButtonMask = CurrentSimulatedButtonMask()
+        };
+        var vp = viewport ?? GetViewport();
+        if (vp != null) vp.PushInput(ev);
+        else Input.ParseInputEvent(ev);
+    }
+
+    private void PushVirtualMouseButton(MouseButton idx, bool pressed, Vector2 pos,
+        bool doubleClick = false, Viewport viewport = null)
+    {
+        var vp = viewport ?? GetViewport();
+        if (pressed)
+        {
+            var nudge = pos + new Vector2(2, 2);
+            PushVirtualMouseMotion(nudge, vp);
+            PushVirtualMouseMotion(pos, vp);
+        }
+        else
+        {
+            _simMousePos = pos;
+        }
+
+        SetSimButton(idx, pressed);
+        var ev = new InputEventMouseButton
+        {
+            Pressed = pressed,
+            ButtonIndex = idx,
+            Position = pos,
+            GlobalPosition = pos,
+            ButtonMask = CurrentSimulatedButtonMask(),
+            DoubleClick = doubleClick
+        };
+        if (vp != null) vp.PushInput(ev);
+        else Input.ParseInputEvent(ev);
+    }
+
+    private void SetSimButton(MouseButton idx, bool down)
+    {
+        if (idx == MouseButton.Left) _simMouseLeftDown = down;
+        else if (idx == MouseButton.Right) _simMouseRightDown = down;
+        else if (idx == MouseButton.Middle) _simMouseMiddleDown = down;
     }
 
     // ── move_mouse ───────────────────────────────────────────────────────
@@ -126,7 +213,7 @@ public partial class GameMcpServer
 
     private string MoveMouse(float x, float y)
     {
-        try { _simMousePos = new Vector2(x, y); Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) }); return $"{{\"ok\":true,\"x\":{x},\"y\":{y}}}"; }
+        try { PushVirtualMouseMotion(new Vector2(x, y)); return $"{{\"ok\":true,\"x\":{x},\"y\":{y},\"mode\":\"virtual\",\"delivery\":\"viewport\"}}"; }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }
     }
 
@@ -137,7 +224,8 @@ public partial class GameMcpServer
         try
         {
             var idx = amount > 0 ? MouseButton.WheelUp : MouseButton.WheelDown;
-            for (int i = 0; i < Math.Abs(amount); i++) Input.ParseInputEvent(new InputEventMouseButton { ButtonIndex = idx, Pressed = true });
+            for (int i = 0; i < Math.Abs(amount); i++)
+                PushVirtualMouseButton(idx, true, _simMousePos);
             return $"{{\"ok\":true,\"amount\":{amount}}}";
         }
         catch (Exception e) { return $"{{\"error\":\"{e.Message}\"}}"; }

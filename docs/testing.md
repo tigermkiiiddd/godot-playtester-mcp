@@ -12,7 +12,7 @@ These only read game state, never mutate it. Safe to call multiple in parallel:
 
 | Tool | What it reads |
 |------|---------------|
-| `get_game_info` | FPS, window size, engine version |
+| `get_game_info` | FPS, window size, engine version, session identity and uptime |
 | `get_game_state` | World objects, positions, distances |
 | `get_ui_layout` | UI tree structure |
 | `get_scene_tree` | Full scene hierarchy |
@@ -211,6 +211,12 @@ Every significant game action MUST write to at least one MCP log tier (AI Log pr
 ```
 
 ## Phase 3: Report — Evidence-Based Summary
+
+### Game Dev Pipeline evidence handoff
+
+If this run was requested by `gd-playtest-report`, return evidence to that skill instead of issuing a pipeline PT/GATE verdict here. The handoff must identify the build, fresh `session_id`/`uptime`, PRD and integration source, ordered actions and observations, per-path result, input mode (`virtual`, `os`, or mixed), and all uses of `force`, direct node mutation, retries, or human intervention.
+
+Match conclusions to the delivery path: viewport input proves behavior inside Godot's viewport routing, not OS focus/occlusion/DPI behavior; OS input can exercise the real window chain; `force`, direct signals, and state mutation are diagnostic bypasses, not proof of player operability. Treat `get_ui_layout.offscreen` and top-level warnings as geometry hints requiring observation, especially around scrolling, not automatic failures. AI execution is automation evidence, not an independent target-player playtest.
 
 After all tests, read logs and compile:
 

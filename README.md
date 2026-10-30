@@ -90,7 +90,7 @@ Direct HTTP — no bridge script needed (the server speaks MCP Streamable-HTTP-c
 ### Input Control
 `press_key` `click_mouse` `move_mouse` `scroll_mouse` `simulate_input`
 
-Mouse tools (`click_mouse`, `move_mouse`, `double_click`, `click_element`) take a `mode`: `virtual` (default, engine-level `InputEventMouse*` injection — fast, headless-ok, but can't catch focus/occlusion/DPI bugs) or `os` (drives the real system cursor via Win32 `SendInput` — true input chain, Windows-only, needs a visible+focused window).
+Mouse tools (`click_mouse`, `move_mouse`, `double_click`, `click_element`) take a `mode`: `virtual` (default, routes `InputEventMouse*` through Godot's viewport — fast and headless-friendly, but cannot prove OS focus/occlusion/DPI behavior) or `os` (drives the real system cursor via Win32 `SendInput` — Windows-only, needs a visible focused window). `click_element(force=true)` is a direct signal bypass and must not be treated as player-reachability evidence.
 
 ### Macro System (scripted input sequences)
 `execute_macro` `get_macro_status` `cancel_macro` `list_macros`

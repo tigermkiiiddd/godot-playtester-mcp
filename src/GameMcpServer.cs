@@ -80,9 +80,14 @@ public partial class GameMcpServer : Node, IInputProvider
     private Vector2 _simMousePos; // initialized to screen center in _Ready
     private bool _simMouseLeftDown;   // simulated left button state
     private bool _simMouseRightDown;  // simulated right button state
+    private bool _simMouseMiddleDown; // simulated middle button state
     private bool _prevMouseLeftDown;  // previous frame state (for edge detection)
     private bool _simMouseLeftJustPressed;  // cached per-frame edge
     private bool _simMouseLeftJustReleased; // cached per-frame edge
+
+    // Runtime identity — lets test reports prove they observed a fresh game process.
+    private string _sessionId;
+    private ulong _sessionStartedMsec;
 
     // IInputProvider — explicit interface implementation
     Vector2 IInputProvider.MousePosition => _simMousePos;
@@ -108,6 +113,8 @@ public partial class GameMcpServer : Node, IInputProvider
     public override void _Ready()
     {
         if (!Enabled || !OS.IsDebugBuild()) return; // 发布版永不开端口
+        _sessionId = Guid.NewGuid().ToString("N");
+        _sessionStartedMsec = Time.GetTicksMsec();
         _simMousePos = DisplayServer.WindowGetSize() / 2; // center of screen
         RegisterBuiltinTools();
         RegisterMacroTools();

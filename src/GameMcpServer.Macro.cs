@@ -76,30 +76,32 @@ public partial class GameMcpServer
 
             case MacroStepType.Click:
                 {
-                    var btn = step.Button.ToLower() switch
+                    if (!TryParseMouseButton(step.Button, out var btn))
                     {
-                        "right" => MouseButton.Right,
-                        "middle" => MouseButton.Middle,
-                        _ => MouseButton.Left
-                    };
-                    Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = btn });
-                    Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = btn });
+                        step.Status = "error";
+                        step.ErrorMessage = $"Unsupported mouse button: {step.Button}";
+                        break;
+                    }
+                    var pos = new Vector2(step.X, step.Y);
+                    PushVirtualMouseButton(btn, true, pos);
+                    PushVirtualMouseButton(btn, false, pos);
                     step.Status = "completed";
                     break;
                 }
 
             case MacroStepType.DoubleClick:
                 {
-                    var dbtn = step.Button.ToLower() switch
+                    if (!TryParseMouseButton(step.Button, out var dbtn))
                     {
-                        "right" => MouseButton.Right,
-                        "middle" => MouseButton.Middle,
-                        _ => MouseButton.Left
-                    };
+                        step.Status = "error";
+                        step.ErrorMessage = $"Unsupported mouse button: {step.Button}";
+                        break;
+                    }
+                    var pos = new Vector2(step.X, step.Y);
                     for (int i = 0; i < 2; i++)
                     {
-                        Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = dbtn, DoubleClick = i == 1 });
-                        Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = dbtn });
+                        PushVirtualMouseButton(dbtn, true, pos, doubleClick: i == 1);
+                        PushVirtualMouseButton(dbtn, false, pos);
                     }
                     step.Status = "completed";
                     break;
@@ -110,23 +112,20 @@ public partial class GameMcpServer
                     bool hasButton = !string.IsNullOrEmpty(step.Button) && step.Button.ToLowerInvariant() != "none";
                     if (hasButton)
                     {
-                        var dragBtn = step.Button.ToLower() switch
+                        if (!TryParseMouseButton(step.Button, out var dragBtn))
                         {
-                            "right" => MouseButton.Right,
-                            "middle" => MouseButton.Middle,
-                            _ => MouseButton.Left
-                        };
+                            step.Status = "error";
+                            step.ErrorMessage = $"Unsupported mouse button: {step.Button}";
+                            break;
+                        }
                         step.ButtonIndex = dragBtn;
-                        _simMousePos = new Vector2(step.X, step.Y);
-                        Input.ParseInputEvent(new InputEventMouseButton { Pressed = true, Position = new Vector2(step.X, step.Y), GlobalPosition = new Vector2(step.X, step.Y), ButtonIndex = dragBtn });
-                        if (dragBtn == MouseButton.Left) _simMouseLeftDown = true;
-                        else if (dragBtn == MouseButton.Right) _simMouseRightDown = true;
+                        PushVirtualMouseButton(dragBtn, true, new Vector2(step.X, step.Y));
                         macro.HeldKeys.Add($"__drag_{dragBtn}");
                     }
                     else
                     {
                         step.ButtonIndex = MouseButton.None;
-                        _simMousePos = new Vector2(step.X, step.Y);
+                        PushVirtualMouseMotion(new Vector2(step.X, step.Y));
                     }
                     break;
                 }
@@ -446,9 +445,7 @@ public partial class GameMcpServer
             bool hasButton = step.ButtonIndex != MouseButton.None;
             if (hasButton)
             {
-                Input.ParseInputEvent(new InputEventMouseButton { Pressed = false, Position = pos, GlobalPosition = pos, ButtonIndex = step.ButtonIndex });
-                if (step.ButtonIndex == MouseButton.Left) _simMouseLeftDown = false;
-                else if (step.ButtonIndex == MouseButton.Right) _simMouseRightDown = false;
+                PushVirtualMouseButton(step.ButtonIndex, false, pos);
                 macro.HeldKeys.Remove($"__drag_{step.ButtonIndex}");
             }
             step.Status = "completed";
@@ -459,8 +456,7 @@ public partial class GameMcpServer
         float t = (float)(step.Elapsed / step.Duration);
         float x = step.X + (step.TargetX - step.X) * t;
         float y = step.Y + (step.TargetY - step.Y) * t;
-        _simMousePos = new Vector2(x, y);
-        Input.ParseInputEvent(new InputEventMouseMotion { Position = new Vector2(x, y), GlobalPosition = new Vector2(x, y) });
+        PushVirtualMouseMotion(new Vector2(x, y));
     }
 
     // ── ProcessTypeText ──────────────────────────────────────────────────
@@ -489,6 +485,12 @@ public partial class GameMcpServer
 
     private void ReleaseStepKeys(MacroRun macro, MacroStep step)
     {
+        if (step.Type == MacroStepType.Drag && step.ButtonIndex != MouseButton.None)
+        {
+            PushVirtualMouseButton(step.ButtonIndex, false, _simMousePos);
+            macro.HeldKeys.Remove($"__drag_{step.ButtonIndex}");
+            step.ButtonIndex = MouseButton.None;
+        }
         foreach (var kc in step.KeyCodes)
             Input.ParseInputEvent(new InputEventKey { Pressed = false, Keycode = kc });
         foreach (var k in step.Keys)

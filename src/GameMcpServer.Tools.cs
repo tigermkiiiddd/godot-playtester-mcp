@@ -38,7 +38,7 @@ public partial class GameMcpServer
             p("{\"action\":{\"type\":\"string\"},\"key\":{\"type\":\"string\"}}", "object"),
             a => SimulateInputAction(a["action"].GetString(), a["key"].GetString()));
 
-        Reg("get_game_info", "Get basic game info: FPS, window size, engine version.",
+        Reg("get_game_info", "Get basic game info including FPS, window size, engine version, fresh-process session_id, and incrementing uptime seconds.",
             p("{}", "object"), _ => GetGameInfo());
 
         // ── Game State & UI ──────────────────────────────────────────────
@@ -49,14 +49,14 @@ public partial class GameMcpServer
             a => GetGameState(a));
 
         Reg("get_ui_layout",
-            "Get UI Control nodes as nested tree (like DOM). Grid patterns (homogeneous mcp_data children) auto-compressed to columnar format {columns,rows} — one header, value arrays per row. rect=[x,y,w,h] in screen pixels. center=[cx,cy] is the click/drag target point. tagged_only (default true) = skip decorative nodes. detail=compact (default, core fields only) or full (all mcp_data fields). path = only inspect subtree. max_depth limits recursion. Returns viewport=[w,h] at top level. Any element whose rect lies outside or overflows the viewport gets an 'offscreen' object ({type:'offscreen'|'clipped', overflow_left/top/right/bottom in px}); interesting controls that overflow are also collected into a top-level 'warnings' array for quick spotting.",
+            "Get UI Control nodes as nested tree (like DOM). Grid patterns (homogeneous mcp_data children) auto-compressed to columnar format {columns,rows} — one header, value arrays per row. rect=[x,y,w,h] in screen pixels. center=[cx,cy] is the click/drag target point. tagged_only (default true) = skip decorative nodes. detail=compact (default, core fields only) or full (all mcp_data fields). path = only inspect subtree. max_depth limits recursion. Returns the main viewport=[w,h]. An 'offscreen' object compares each control with its own viewport and clipping ancestors. Top-level warnings are diagnostic hints, not automatic failures; normal ScrollContainer overflow is kept inline and suppressed from warnings.",
             p("{\"visible_only\":{\"type\":\"boolean\"},\"types\":{\"type\":\"string\"},\"tagged_only\":{\"type\":\"boolean\"},\"path\":{\"type\":\"string\"},\"max_depth\":{\"type\":\"integer\"},\"detail\":{\"type\":\"string\",\"enum\":[\"compact\",\"full\"]}}", "object"),
             a => GetUILayout(a));
 
         // ── UI Control ───────────────────────────────────────────────────
 
-        Reg("click_element", "Click a UI element by name or path. Uses element's rect center. Disabled or invisible buttons are rejected (a real player could not click them) unless force=true. mode=os performs a real OS click (SendInput) with true hit-testing instead of an engine-level signal/event injection — the click only lands if the whole real input chain actually routes it there.",
-            p("{\"name\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"button\":{\"type\":\"string\"},\"offset_x\":{\"type\":\"number\"},\"offset_y\":{\"type\":\"number\"},\"force\":{\"type\":\"boolean\"},\"mode\":{\"type\":\"string\",\"enum\":[\"virtual\",\"os\"]}}", "object"),
+        Reg("click_element", "Click a UI element by name or path at its rect center. Normal virtual mode uses the target viewport's GUI picking. Disabled or invisible buttons are rejected unless force=true; force emits a button signal directly and is a diagnostic bypass, not player-reachability evidence. mode=os uses Win32 SendInput and the real window chain.",
+            p("{\"name\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"button\":{\"type\":\"string\",\"enum\":[\"left\",\"right\",\"middle\"]},\"offset_x\":{\"type\":\"number\"},\"offset_y\":{\"type\":\"number\"},\"force\":{\"type\":\"boolean\"},\"mode\":{\"type\":\"string\",\"enum\":[\"virtual\",\"os\"]}}", "object"),
             a => ClickElement(a));
 
         Reg("type_text", "Input text into a UI element (LineEdit/TextEdit). Mode: set=direct, type=simulated keystrokes.",
@@ -76,7 +76,7 @@ public partial class GameMcpServer
             a => Hover(a["x"].GetSingle(), a["y"].GetSingle()));
 
         Reg("double_click", "Double-click at screen coordinates.",
-            p("{\"button\":{\"type\":\"string\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"mode\":{\"type\":\"string\",\"enum\":[\"virtual\",\"os\"]}}", "object"),
+            p("{\"button\":{\"type\":\"string\",\"enum\":[\"left\",\"right\",\"middle\"]},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"mode\":{\"type\":\"string\",\"enum\":[\"virtual\",\"os\"]}}", "object"),
             a => DoubleClick(
                 a.ContainsKey("button") ? a["button"].GetString() : "left",
                 a.ContainsKey("x") ? a["x"].GetSingle() : 0f,
@@ -84,7 +84,7 @@ public partial class GameMcpServer
                 a.ContainsKey("mode") ? a["mode"].GetString() : "virtual"));
 
         Reg("drag", "Drag from one point to another. Press at start, move, release at end.",
-            p("{\"from_x\":{\"type\":\"number\"},\"from_y\":{\"type\":\"number\"},\"to_x\":{\"type\":\"number\"},\"to_y\":{\"type\":\"number\"},\"duration\":{\"type\":\"number\"},\"button\":{\"type\":\"string\"}}", "object"),
+            p("{\"from_x\":{\"type\":\"number\"},\"from_y\":{\"type\":\"number\"},\"to_x\":{\"type\":\"number\"},\"to_y\":{\"type\":\"number\"},\"duration\":{\"type\":\"number\"},\"button\":{\"type\":\"string\",\"enum\":[\"left\",\"right\",\"middle\"]}}", "object"),
             a => DragMouse(a));
 
         // ── Input ────────────────────────────────────────────────────────
@@ -94,8 +94,8 @@ public partial class GameMcpServer
             a => PressKey(a["key"].GetString(), a.ContainsKey("action") ? a["action"].GetString() : "press"));
 
         Reg("click_mouse", "Click or release a mouse button at screen coordinates. mode=virtual (default) injects an InputEventMouseButton directly into the engine — fast, headless-ok, but bypasses the real OS input chain. mode=os drives the real system cursor via Win32 SendInput — requires a visible+focused window, Windows-only, occupies the physical mouse.",
-            p("{\"button\":{\"type\":\"string\"},\"action\":{\"type\":\"string\"},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"mode\":{\"type\":\"string\",\"enum\":[\"virtual\",\"os\"]}}", "object", new[] { "button", "action" }),
-            a => ClickMouse(a["button"].GetString(), a["action"].GetString(),
+            p("{\"button\":{\"type\":\"string\",\"enum\":[\"left\",\"right\",\"middle\"]},\"action\":{\"type\":\"string\",\"enum\":[\"press\",\"release\",\"click\"]},\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"},\"mode\":{\"type\":\"string\",\"enum\":[\"virtual\",\"os\"]}}", "object", new[] { "button" }),
+            a => ClickMouse(a["button"].GetString(), a.ContainsKey("action") ? a["action"].GetString() : "click",
                 a.ContainsKey("x") ? a["x"].GetSingle() : 0f,
                 a.ContainsKey("y") ? a["y"].GetSingle() : 0f,
                 a.ContainsKey("mode") ? a["mode"].GetString() : "virtual"));
