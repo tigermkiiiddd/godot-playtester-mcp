@@ -88,19 +88,20 @@ public void Refresh()
 
 ```csharp
 // UI events
-invBtn.Pressed += () => {
-    _inventoryPanel.Visible = !_inventoryPanel.Visible;
-    GameMcpServer.Instance?.Log("ui", _inventoryPanel.Visible ? "背包打开" : "背包关闭");
+panelBtn.Pressed += () => {
+    _panel.Visible = !_panel.Visible;
+    GameMcpServer.Instance?.Log("ui", _panel.Visible ? "panel_open" : "panel_close");
 };
 
 // Drag events
-private void StartDrag(InventoryCell source, Vector2 pos) {
+private void StartDrag(DragSlot source, Vector2 pos) {
     _dragging = true;
-    GameMcpServer.Instance?.Log("inventory", $"拖拽开始: {source.Data.ItemName}");
+    GameMcpServer.Instance?.Log("drag", $"drag_start: {source.Name}");
 }
 
-private void EndDrag(InventoryCell target) {
-    GameMcpServer.Instance?.Log("inventory", $"拖拽完成: {_dragSource.Data.ItemName} → {target?.Data.ItemName}");
+private void EndDrag(DragSlot target) {
+    _dragging = false;
+    GameMcpServer.Instance?.Log("drag", $"drag_end: {target?.Name}");
 }
 
 // Toasts / messages
@@ -174,43 +175,35 @@ Keep evidence boundaries explicit: viewport injection can verify Godot-side even
 
 For CanvasLayer-based drag-and-drop UI, physical mouse uses `_Input` with `InputEventMouseButton`/`InputEventMouseMotion`, and MCP simulated mouse uses `_Process` polling. Both share the same `StartDrag`/`EndDrag` logic.
 
-**Physical mouse** goes through `_Input`. **MCP simulated mouse** is polled from `GameMcpServer.Instance` fields.
+**Physical mouse** goes through `_Input`. **MCP simulated mouse** is polled from `GameMcpServer.Instance` fields. `DragSlot` below stands for whatever your game drags: a card, a grid item, a unit.
 
 ```csharp
 // ── State ──────────────────────────────────────────────────────
 private bool _physMouseDown;
 private bool _dragging;
 private Control _dragPreview;
-private InventoryCell _dragSource;
-
-// ── Keyboard shortcuts (in _UnhandledInput) ────────────────────
-public override void _UnhandledInput(InputEvent ev)
-{
-    if (ev is InputEventKey { Pressed: true, Keycode: Key.I })
-        _inventoryPanel.Visible = !_inventoryPanel.Visible;
-}
 
 // ── Physical mouse drag (in _Input, NOT _UnhandledInput!) ──────
 // _Input fires before GUI processing, so it receives events even
 // when child Controls have MouseFilter.Stop
 public override void _Input(InputEvent ev)
 {
-    if (!_inventoryPanel.Visible) return;
+    if (!_dragArea.Visible) return;
 
     if (ev is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)
     {
         if (mb.Pressed && !_dragging)
         {
-            var cell = HitTestCell(mb.GlobalPosition);
-            if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
+            var slot = HitTestSlot(mb.GlobalPosition);
+            if (slot != null)
             {
-                StartDrag(cell, mb.GlobalPosition);
+                StartDrag(slot, mb.GlobalPosition);
                 _physMouseDown = true;
             }
         }
         else if (!mb.Pressed && _physMouseDown && _dragging)
         {
-            EndDrag(HitTestCell(mb.GlobalPosition));
+            EndDrag(HitTestSlot(mb.GlobalPosition));
             _physMouseDown = false;
         }
     }
@@ -225,7 +218,7 @@ public override void _Input(InputEvent ev)
 // ── MCP simulated mouse drag (polled in _Process) ─────────────
 public override void _Process(double delta)
 {
-    if (_inventoryPanel.Visible)
+    if (_dragArea.Visible)
         PollSimMouseForDrag();
 }
 
@@ -237,14 +230,12 @@ private void PollSimMouseForDrag()
     if (mcp == null) return;
 
     var mousePos = mcp.SimMousePos;
-    bool justPressed = mcp.SimMouseLeftJustPressed;
-    bool justReleased = mcp.SimMouseLeftJustReleased;
 
-    if (justPressed && !_dragging)
+    if (mcp.SimMouseLeftJustPressed && !_dragging)
     {
-        var cell = HitTestCell(mousePos);
-        if (cell != null && !string.IsNullOrEmpty(cell.ItemName))
-            StartDrag(cell, mousePos);
+        var slot = HitTestSlot(mousePos);
+        if (slot != null)
+            StartDrag(slot, mousePos);
     }
 
     if (_dragging)
@@ -252,27 +243,22 @@ private void PollSimMouseForDrag()
         if (_dragPreview != null)
             _dragPreview.Position = mousePos;
 
-        if (justReleased)
-            EndDrag(HitTestCell(mousePos));
+        if (mcp.SimMouseLeftJustReleased)
+            EndDrag(HitTestSlot(mousePos));
     }
 }
 
-// ── Hit test: find which inventory cell is under the cursor ────
-private InventoryCell HitTestCell(Vector2 mousePos)
+// ── Hit test: find the draggable slot under the cursor ─────────
+private DragSlot HitTestSlot(Vector2 mousePos)
 {
-    for (int row = 0; row < Rows; row++)
-        for (int col = 0; col < Cols; col++)
-        {
-            var cell = _cells[col, row];
-            if (cell == null || !cell.Visible) continue;
-            if (cell.GetGlobalRect().HasPoint(mousePos))
-                return cell;
-        }
+    foreach (var slot in _slots)
+        if (slot.Visible && slot.GetGlobalRect().HasPoint(mousePos))
+            return slot;
     return null;
 }
 ```
 
-For buttons, `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` which bypasses the CanvasLayer routing issue.
+Buttons need none of this: `click_element` goes through viewport GUI picking. Its `force:true` option emits the pressed signal directly, which is a diagnostic bypass rather than proof a player can click.
 
 ## Step 9: Map/Area Selection via Dual-Channel Polling
 

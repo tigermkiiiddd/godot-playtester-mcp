@@ -85,7 +85,7 @@ Before writing test cases, classify each feature to determine how many boundary 
 | **Multi-step** | Step 1 → Step 2 → Step 3 → Result | 3-5 | `Cancel` at EACH step + one `Recovery` |
 | **State-heavy** | Opens/closes panels, overlays, changes mode | 2-3 | `Cancel` + `Recovery` |
 
-**How many test cases total?** One test case per logical feature. A "film shooting flow" is ONE test case (multi-step). A "heal button" is ONE test case (simple). Aim for **3-8 test cases** per playtest session.
+**How many test cases total?** One test case per logical feature. A multi-step placement flow is ONE test case. A "heal button" is ONE test case (simple). Aim for **3-8 test cases** per playtest session.
 
 ### Step 2: Copy and Fill the Template
 
@@ -227,19 +227,19 @@ After all tests, read logs and compile:
 
 | # | Test | Type | Tool(s) | Result | Evidence (log entries) |
 |---|------|------|---------|--------|----------------------|
-| 1 | Rectangle walk | Happy | execute_macro + get_game_state | PASS | macro done in 4.8s, pos≈(0,0) |
-| 1b | Walk during dialog | Boundary | press_key during modal | PASS | walk blocked, dialog intact |
-| 2 | State queries | Happy | get_game_state + get_ui_layout + get_metrics | PASS | 34 tools, 4 metrics, 24 grid cells |
-| 3 | Open/close inventory | Happy | click_element | PASS | log: "背包按钮打开" + "背包X按钮关闭" |
-| 3b | Open while shop open | Boundary | click_element during shop | PASS | shop closes first |
-| 3c | Close via Escape | Boundary | press_key(Escape) | PASS | inventory hidden |
-| 4 | Drag swap | Happy | execute_macro(drag) | PASS | log: "拖拽开始: 铁剑" + "拖拽完成" |
-| 5 | Heal button | Happy | click_element | PASS | log: "恢复了50点生命值!" |
+| 1 | [Core action] | Happy | execute_macro + get_game_state | PASS | macro done, state changed as expected |
+| 1b | [Core action during modal] | Boundary | press_key during modal | PASS | action blocked, modal intact |
+| 2 | State queries | Happy | get_game_state + get_ui_layout + get_metrics | PASS | [N] tools, [N] metrics |
+| 3 | Open/close panel | Happy | click_element | PASS | log: "panel_open" + "panel_close" |
+| 3b | Open while another panel is open | Boundary | click_element | PASS | first panel closes |
+| 3c | Close via Escape | Boundary | press_key(Escape) | PASS | panel hidden |
+| 4 | Drag item | Happy | execute_macro(drag) | PASS | log: "drag_start" + "drag_end" |
+| 5 | Confirm button | Happy | click_element | PASS | log: "[game event]" |
 
 ### Bugs Found
 | # | Description | Boundary Test That Caught It | Severity |
 |---|-------------|------------------------------|----------|
-| 1 | Game freezes after canceling zone selection in film shooting | TC1-B1 | Critical |
+| 1 | [Symptom, such as: game freezes after canceling a selection] | TC1-B1 | Critical |
 
 ### Coverage
 - Test cases: [N] happy paths + [M] boundary cases
@@ -250,43 +250,45 @@ After all tests, read logs and compile:
 
 ## Example: Complete Playtest Session
 
-### Test 1: Open Inventory (Happy Path)
+Panel and drag below stand in for any feature in your game.
+
+### Test 1: Open Panel (Happy Path)
 ```
-Agent: log(category="playtest", message="TC2 开始: 库存打开/关闭")
-Agent: click_element(name="InvBtn")              → ok: true
-Agent: get_logs(limit=3)                         → {category:"ui", message:"inventory_open"}
+Agent: log(category="playtest", message="TC2 start: panel open/close")
+Agent: click_element(name="PanelBtn")            → ok: true
+Agent: get_logs(limit=3)                         → {category:"ui", message:"panel_open"}
 Result: PASS — log closed-loop verified
 ```
 
-### Test 1b: Open Inventory via Escape (Boundary)
+### Test 1b: Close Panel via Escape (Boundary)
 ```
-Agent: log(category="playtest", message="TC2-B1: 关闭库存通过Escape键")
-Agent: click_element(name="InvBtn")              → open inventory
+Agent: log(category="playtest", message="TC2-B1: close panel with Escape")
+Agent: click_element(name="PanelBtn")            → open panel
 Agent: press_key(key="Escape")                   → close via Escape
-Agent: get_ui_layout(path="HUDLayer")            → InvPanel visible=false
+Agent: get_ui_layout()                           → Panel visible=false
 Agent: get_game_state()                          → game responsive
 Result: PASS — clean close, game still responsive
 ```
 
 ### Test 2: Drag Item (Happy Path)
 ```
-Agent: log(category="playtest", message="TC4 开始: 拖拽铁剑")
-Agent: click_element(name="InvBtn")              → open inventory
+Agent: log(category="playtest", message="TC4 start: drag item")
+Agent: click_element(name="PanelBtn")            → open panel
 Agent: execute_macro(steps=[{drag from (233,136) to (233,388)}]) → macro_001 completed
-Agent: get_logs(limit=5) → "拖拽开始: 铁剑 (0,0)" + "拖拽完成: ↔ 铁剑"
-Agent: get_ui_layout(path=InvGrid) → cell (0,0) empty, cell (0,3) has 铁剑
+Agent: get_logs(limit=5) → "drag_start" + "drag_end"
+Agent: get_ui_layout(path=Grid) → source slot empty, target slot has the item
 Result: PASS — both log evidence AND data verification
 ```
 
 ### Test 2b: Drag Cancel (Boundary)
 ```
-Agent: log(category="playtest", message="TC4-B1: 取消拖拽中途")
-Agent: click_element(name="InvBtn")              → open inventory
+Agent: log(category="playtest", message="TC4-B1: cancel mid-drag")
+Agent: click_element(name="PanelBtn")            → open panel
 Agent: execute_macro(steps=[
   {action:"drag", from_x:233, from_y:136, to_x:400, to_y:300, duration:0.3},
   {action:"tap_key", keys:"Escape"}
 ]) → macro executed
-Agent: get_ui_layout(path=InvGrid)               → items unchanged (no partial swap)
+Agent: get_ui_layout(path=Grid)                  → items unchanged (no partial swap)
 Agent: get_game_state()                          → game responsive
 Result: PASS — drag cancelled cleanly, no item corruption
 ```

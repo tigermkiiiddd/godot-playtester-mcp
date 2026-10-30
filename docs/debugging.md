@@ -18,13 +18,13 @@ Common pitfalls, root causes, and fixes when working with the Godot Playtester M
 
 ## Critical Issues (Detailed)
 
-### click_element Bypasses Button Disabled State
+### force:true Bypasses Button Disabled State
 
-**Symptom**: AI clicks a disabled button and it fires the callback, causing unintended game behavior (e.g. entering a photo mode panel that should be locked).
+**Symptom**: A disabled button fires its callback during a test, causing unintended game behavior.
 
-**Root cause**: `click_element` uses `EmitSignal(BaseButton.SignalName.Pressed)` to trigger buttons. This directly emits the `pressed` signal, completely bypassing the `Disabled` property check. A button with `Disabled = true` still fires when clicked via MCP.
+**Root cause**: `click_element` refuses `Disabled` or hidden buttons by default. With `force:true` it emits the `pressed` signal directly, which skips hit-testing and the `Disabled` check.
 
-**This is a design tradeoff, not a bug.** `EmitSignal` is necessary to bypass CanvasLayer input routing issues (buttons inside CanvasLayer don't receive `Input.ParseInputEvent`). The bypass of `Disabled` is a known side effect.
+**This is a diagnostic bypass, not a bug.** A forced click is not evidence that a player can reach the control, and it must be recorded in the test evidence.
 
 **Development convention**: All button callbacks in MCP-compatible games MUST guard `Disabled`:
 ```csharp

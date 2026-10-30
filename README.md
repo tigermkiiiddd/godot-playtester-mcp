@@ -42,7 +42,7 @@ git submodule add https://github.com/tigermkiiiddd/godot-playtester-mcp.git addo
 
 Then add `res://addons/godot_playtester_mcp/src/GameMcpServer.cs` as an Autoload in Project Settings.
 
-**Option B — copy files**: copy all 15 files from `src/` anywhere in your project, then add `GameMcpServer.cs` as an Autoload.
+**Option B — copy files**: copy all files from `src/` anywhere in your project, then add `GameMcpServer.cs` as an Autoload.
 
 All classes live in the `GodotPlaytester` namespace. The server starts only in **debug builds** (release builds skip it) and listens on `http://localhost:9876` by default.
 

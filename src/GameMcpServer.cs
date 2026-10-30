@@ -19,7 +19,7 @@ using System.Threading;
 ///   3. The server starts automatically when the game runs
 ///
 /// Game Development Protocol:
-///   - Tag game objects with Godot Groups: "player", "enemies", "npcs", "items", etc.
+///   - Tag game objects with Godot Groups, and set DefaultGroups/PlayerGroup to your game's vocabulary
 ///   - Name UI Control nodes so MCP can extract layout info
 ///   - Register metrics for numeric monitoring
 /// </summary>
@@ -38,6 +38,9 @@ public partial class GameMcpServer : Node, IInputProvider
     [Export] public bool Enabled = true;
     [Export] public string ServerName = "godot-playtester";
     [Export] public NodePath PlayerPath;
+    // Game-specific vocabulary. Replace these per project; turn-based or multi-unit games can clear PlayerGroup.
+    [Export] public string PlayerGroup = "player";
+    [Export] public string[] DefaultGroups = { "enemies", "npcs", "items", "interactables", "projectiles", "triggers" };
 
     private HttpListener _listener;
     private Thread _serverThread;

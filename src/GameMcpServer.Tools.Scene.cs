@@ -132,6 +132,7 @@ public partial class GameMcpServer
     private Node FindPlayer()
     {
         if (!string.IsNullOrEmpty(PlayerPath)) return GetNodeOrNull(PlayerPath);
-        return GetTree()?.GetFirstNodeInGroup("player");
+        if (string.IsNullOrEmpty(PlayerGroup)) return null;
+        return GetTree()?.GetFirstNodeInGroup(PlayerGroup);
     }
 }

@@ -41,7 +41,7 @@ git submodule add https://github.com/tigermkiiiddd/godot-playtester-mcp.git addo
 ```
 Then add `res://addons/godot_playtester_mcp/src/GameMcpServer.cs` as an Autoload in Project Settings.
 
-**(b) Copy files**: copy all 15 files from `src/` anywhere in your project, then add `GameMcpServer.cs` as an Autoload.
+**(b) Copy files**: copy all files from `src/` anywhere in your project, then add `GameMcpServer.cs` as an Autoload.
 
 Either way: all classes live in the `GodotPlaytester` namespace, the server starts only in debug builds, and it listens on `http://localhost:9876` by default (`[Export] public int Port`).
 
@@ -69,7 +69,7 @@ The MCP server reads game state through **Godot Groups** you tag objects with, a
 
 ### Group Naming Convention
 
-`get_game_state` discovers world objects through Godot Groups. The table below is a **default vocabulary** suited to action/avatar games — it is not required. Games define their own ontology; `get_game_state(groups=...)` accepts any group names you've tagged objects with.
+`get_game_state` discovers world objects through Godot Groups. The table below is a **default vocabulary** suited to action/avatar games — it is not required. Games define their own ontology: set the `DefaultGroups` and `PlayerGroup` exports to your own vocabulary, or pass `get_game_state(groups=...)` per call.
 
 | Group | Purpose | Notes |
 |-------|---------|-------|
@@ -242,19 +242,19 @@ GameMcpServer.Instance?.DebugLog("Pathfinding recalculated, nodes=42");
 
 ```csharp
 // UI button callbacks — ALWAYS log
-invBtn.Pressed += () => {
-    _inventoryPanel.Visible = !_inventoryPanel.Visible;
-    GameMcpServer.Instance?.Log("ui", _inventoryPanel.Visible ? "背包打开" : "背包关闭");
+panelBtn.Pressed += () => {
+    _panel.Visible = !_panel.Visible;
+    GameMcpServer.Instance?.Log("ui", _panel.Visible ? "panel_open" : "panel_close");
 };
 
 // Drag events — ALWAYS log start and end
-private void StartDrag(InventoryCell source, Vector2 pos) {
+private void StartDrag(DragSlot source, Vector2 pos) {
     _dragging = true;
-    GameMcpServer.Instance?.Log("inventory", $"拖拽开始: {source.Data.ItemName} ({source.Col},{source.Row})");
+    GameMcpServer.Instance?.Log("drag", $"drag_start: {source.Name}");
 }
 
-private void EndDrag(InventoryCell target) {
-    GameMcpServer.Instance?.Log("inventory", $"拖拽完成: {_dragSource.Data.ItemName} → {(target?.Data.ItemName ?? "空格")}");
+private void EndDrag(DragSlot target) {
+    GameMcpServer.Instance?.Log("drag", $"drag_end: {target?.Name}");
 }
 
 // Toast/message — ALWAYS log so agent can verify
@@ -273,11 +273,11 @@ Every significant game action **must** write to at least one MCP log tier (AI Lo
 
 ```csharp
 // WRONG — only Godot console, AI can't verify
-GD.Print("[背包] 打开");
+GD.Print("[panel] open");
 
 // CORRECT — both Godot console AND MCP AI Log
-GD.Print("[背包] 打开");
-GameMcpServer.Instance?.Log("ui", "背包打开");
+GD.Print("[panel] open");
+GameMcpServer.Instance?.Log("ui", "panel_open");
 ```
 
 **Minimum events that MUST log:**
@@ -359,7 +359,7 @@ Two input channels for the mouse tools below, selected via `mode`:
 
 | mode | How | Trade-off |
 |------|-----|-----------|
-| `virtual` (default) | Injects `InputEventMouse*` straight into the engine (`Input.ParseInputEvent`) | Fast, headless-ok — but bypasses the real OS→window→engine chain, so it can't catch (or reproduce) focus/occlusion/`mouse_filter`/DPI bugs |
+| `virtual` (default) | Sends `InputEventMouse*` through `Viewport.PushInput` | Fast, headless-ok — but bypasses the real OS→window→engine chain, so it can't catch (or reproduce) focus/occlusion/`mouse_filter`/DPI bugs |
 | `os` | Drives the real system cursor via Win32 `SendInput`/`SetCursorPos` | True input chain, catches those bugs — requires a visible+focused window, Windows-only, occupies the physical mouse during the test; `move_mouse` ignores `duration` in this mode |
 
 | Tool | Description | Parameters |

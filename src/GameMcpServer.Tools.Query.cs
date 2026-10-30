@@ -52,7 +52,7 @@ public partial class GameMcpServer
         Node2D p2d = player as Node2D;
         if (p2d != null) result["player"] = BuildNodeInfo(p2d, camera, p2d);
 
-        var tracked = groups ?? new[] { "enemies", "npcs", "items", "interactables", "projectiles", "triggers" };
+        var tracked = groups ?? DefaultGroups;
         foreach (var group in tracked)
         {
             var g = group.Trim();

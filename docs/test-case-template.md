@@ -57,10 +57,10 @@ TC{N}-B{M}: [Category] — [short description]
 
 **Examples:**
 ```
-TC1-B1: Cancel — cancel at genre selection step
+TC1-B1: Cancel — cancel at category selection step
 TC1-B2: Cancel — cancel at zone selection (deepest step)
 TC1-B3: Recovery — re-enter flow after cancel
-TC1-B4: Empty — confirm without selecting genre
+TC1-B4: Empty — confirm without selecting a category
 TC1-B5: TimingLock — click confirm during panel slide-in animation
 TC2-B1: Repeat — double-click heal button rapidly
 TC3-B1: ResourceEdge — heal when HP is already full
@@ -117,7 +117,7 @@ TC1: Heal Button
     Steps:
       1. get_game_state() — record current HP
       2. click_element(name="HealBtn")
-      3. get_logs(limit=3) — verify "恢复了50点生命值"
+      3. get_logs(limit=3) — verify "heal_applied"
       4. get_game_state() — verify HP increased by 50
     Expected: HP +50, toast appears, button disabled for 10s
     Evidence: get_logs shows heal entry
@@ -135,7 +135,7 @@ TC1: Heal Button
 
 ## Template B — Multi-Step Flow
 
-Use for: wizard, chain, selection sequence (film shooting → select genre → select actor → select zone → confirm)
+Use for: wizard, chain, selection sequence (open panel → select category → select item → select position → confirm)
 
 ```markdown
 TC{N}: {Flow Name}
@@ -176,48 +176,48 @@ TC{N}: {Flow Name}
 ### Filled Example
 
 ```markdown
-TC2: Film Shooting Flow
+TC2: Placement Flow
   Type: Multi-step
-  Feature: Player selects genre, picks actors, selects a zone, begins filming
-  Flow: OpenPanel → SelectGenre → SelectActor → SelectZone → StartFilming
-  UI: FilmBtn, GenreOptionBtn, ActorList, ConfirmBtn, CancelBtn, ZoneTiles, StartFilmingBtn
+  Feature: Player selects a category, picks an item, selects a position, confirms
+  Flow: OpenPanel → SelectCategory → SelectItem → SelectPosition → Confirm
+  UI: BuildBtn, CategoryOptionBtn, ItemList, NextBtn, CancelBtn, Tile_x_y, ConfirmBtn
 
   HP:
     Steps:
-      1. click_element(name="FilmBtn") — open filming panel
-      2. select_option(name="GenreOptionBtn", index=0) — select Action
-      3. click_element on ActorList item — select actor
-      4. click_element(name="ConfirmBtn") — enter zone mode
-      5. click_element(name="ZoneTile_2_3") — select zone
-      6. click_element(name="StartFilmingBtn") — start filming
-      7. get_logs(limit=5) — verify "filming_started" with all params
-    Expected: Filming begins with genre=Action, selected actor, selected zone
-    Evidence: get_logs shows "filming_started" with all three parameters
+      1. click_element(name="BuildBtn") — open panel
+      2. select_option(name="CategoryOptionBtn", index=0) — select first category
+      3. click_element on ItemList item — select item
+      4. click_element(name="NextBtn") — enter position mode
+      5. click_element(name="Tile_2_3") — select position
+      6. click_element(name="ConfirmBtn") — confirm
+      7. get_logs(limit=5) — verify "placement_done" with all params
+    Expected: Item placed with the selected category, item, and position
+    Evidence: get_logs shows "placement_done" with all three parameters
 
-  TC2-B1: Cancel — cancel at genre selection (first step)
+  TC2-B1: Cancel — cancel at category selection (first step)
     Steps:
-      1. click_element(name="FilmBtn") — open panel
+      1. click_element(name="BuildBtn") — open panel
       2. click_element(name="CancelBtn") — cancel immediately
-      3. get_ui_layout() — verify no filming panels visible
+      3. get_ui_layout() — verify panel closed
       4. get_game_state() — verify game NOT frozen
-    Check: filming panel closed, no overlays, game responsive, can re-open
+    Check: panel closed, no overlays, game responsive, can re-open
 
-  TC2-B2: Cancel — cancel at zone selection (deepest step)
+  TC2-B2: Cancel — cancel at position selection (deepest step)
     Steps:
-      1. FilmBtn → select genre → select actor → ConfirmBtn — reach zone mode
-      2. click_element(name="CancelBtn") — cancel zone selection
-      3. get_ui_layout() — verify filmingPanel visible, no zone overlay
+      1. BuildBtn → select category → select item → NextBtn — reach position mode
+      2. click_element(name="CancelBtn") — cancel position selection
+      3. get_ui_layout() — verify panel visible, no position overlay
       4. get_game_state() — verify game NOT frozen
-    Check: zone overlay removed, filming panel visible, game NOT frozen
+    Check: position overlay removed, panel visible, game NOT frozen
 
-  TC2-B3: Recovery — re-enter flow after zone cancel
+  TC2-B3: Recovery — re-enter flow after cancel
     Steps:
-      1. From B2 state (just cancelled zone selection)
-      2. click_element(name="FilmBtn") — re-enter flow
-      3. Select Comedy genre → select different actor → ConfirmBtn
-      4. select_option(name="ZoneTile_1_1") → StartFilmingBtn
-      5. get_logs(limit=5) — verify genre=Comedy (NOT old Action)
-    Check: fresh state, no leftover data from first attempt, filming starts correctly
+      1. From B2 state (just cancelled position selection)
+      2. click_element(name="BuildBtn") — re-enter flow
+      3. Select the second category → select a different item → NextBtn
+      4. click_element(name="Tile_1_1") → ConfirmBtn
+      5. get_logs(limit=5) — verify the second category (NOT the old one)
+    Check: fresh state, no leftover data from first attempt, flow completes correctly
 ```
 
 ---
